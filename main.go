@@ -18,8 +18,8 @@ func main() {
 	// Create application with options
 	err := wails.Run(&options.App{
 		Title:  "localShareGo",
-		Width:  1024,
-		Height: 768,
+		Width:  512,
+		Height: 384,
 		AssetServer: &assetserver.Options{
 			Assets: assets,
 		},

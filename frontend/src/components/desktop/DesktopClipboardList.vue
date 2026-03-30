@@ -1,13 +1,13 @@
 <template>
   <section
-    class="grid min-h-0 grid-rows-[auto,minmax(0,1fr)] overflow-hidden rounded-[12px] border border-[rgba(20,33,27,0.12)] bg-[rgba(250,248,242,0.88)] shadow-[0_16px_48px_rgba(40,34,19,0.08)] backdrop-blur-[14px]"
+    class="flex min-h-0 flex-col overflow-hidden rounded-[12px] border border-[rgba(20,33,27,0.12)] bg-[rgba(250,248,242,0.88)] shadow-[0_16px_48px_rgba(40,34,19,0.08)] backdrop-blur-[14px]"
   >
-    <div class="grid grid-cols-[minmax(0,1fr),auto] gap-[0.55rem] border-b border-[rgba(20,33,27,0.08)] px-3 py-[0.7rem]">
+    <div class="flex items-center gap-[0.55rem] border-b border-[rgba(20,33,27,0.08)] px-3 py-[0.7rem]">
       <n-input
         :value="search"
         clearable
         placeholder="搜索"
-        class="[&_.n-input-wrapper]:!rounded-[10px]"
+        class="min-w-0 flex-1 [&_.n-input-wrapper]:!rounded-[10px]"
         @update:value="emit('update:search', $event)"
       >
         <template #prefix>
@@ -44,7 +44,7 @@
           v-for="item in items"
           :key="item.id"
           type="button"
-          class="grid w-full gap-[0.42rem] border-0 border-b border-[rgba(20,33,27,0.08)] px-[0.9rem] py-[0.82rem] text-left transition-colors duration-150 hover:bg-[rgba(31,122,90,0.06)]"
+          class="flex w-full flex-col gap-[0.42rem] border-0 border-b border-[rgba(20,33,27,0.08)] px-[0.9rem] py-[0.82rem] text-left transition-colors duration-150 hover:bg-[rgba(31,122,90,0.06)]"
           :class="[
             item.id === selectedId || item.isCurrent ? 'bg-[rgba(31,122,90,0.08)]' : 'bg-transparent',
             item.isCurrent ? 'shadow-[inset_2px_0_0_#1f7a5a]' : '',

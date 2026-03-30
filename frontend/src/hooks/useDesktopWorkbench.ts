@@ -25,6 +25,7 @@ export function useDesktopWorkbench() {
   const refreshing = ref(false);
   const search = ref("");
   const pinnedOnly = ref(false);
+  const menuBarVisible = ref(false);
   const webPanelOpen = ref(false);
   const detailPanelOpen = ref(false);
   const diagnosticsModalOpen = ref(false);
@@ -48,12 +49,6 @@ export function useDesktopWorkbench() {
     const server = bootstrap.value?.services.httpServer;
     if (!server) return "--";
     return `${server.bindHost}:${sessionPort.value}`;
-  });
-  const serverStateTone = computed(() => {
-    const state = bootstrap.value?.services.httpServer.state;
-    if (state === "running") return "running";
-    if (state === "failed") return "failed";
-    return "idle";
   });
   const baseAccessUrl = computed(() => bootstrap.value?.services.session.accessUrl ?? "");
   const candidateHosts = computed(() => {
@@ -85,7 +80,7 @@ export function useDesktopWorkbench() {
   );
   const candidateOptions = computed<DropdownOption[]>(() =>
     candidateHosts.value.map((host) => ({
-      label: host === activeHost.value ? `${host} · 当前` : host,
+      label: host === activeHost.value ? `${host} · current` : host,
       key: host,
     })),
   );
@@ -117,8 +112,13 @@ export function useDesktopWorkbench() {
 
   let cleanup: (() => void) | null = null;
   let clockTimer: number | null = null;
+  let altToggleArmed = false;
 
   onMounted(async () => {
+    window.addEventListener("keydown", handleWindowKeyDown);
+    window.addEventListener("keyup", handleWindowKeyUp);
+    window.addEventListener("blur", handleWindowBlur);
+
     if (!available) {
       loading.value = false;
       return;
@@ -144,6 +144,9 @@ export function useDesktopWorkbench() {
     if (clockTimer !== null) {
       window.clearInterval(clockTimer);
     }
+    window.removeEventListener("keydown", handleWindowKeyDown);
+    window.removeEventListener("keyup", handleWindowKeyUp);
+    window.removeEventListener("blur", handleWindowBlur);
   });
 
   async function loadBootstrap() {
@@ -196,7 +199,44 @@ export function useDesktopWorkbench() {
   }
 
   function openWebPanel() {
+    hideMenuBar();
     webPanelOpen.value = true;
+  }
+
+  function hideMenuBar() {
+    menuBarVisible.value = false;
+    altToggleArmed = false;
+  }
+
+  function handleWindowKeyDown(event: KeyboardEvent) {
+    if (event.key === "Alt") {
+      if (!event.repeat) {
+        altToggleArmed = true;
+      }
+      return;
+    }
+
+    altToggleArmed = false;
+
+    if (event.key === "Escape") {
+      hideMenuBar();
+    }
+  }
+
+  function handleWindowKeyUp(event: KeyboardEvent) {
+    if (event.key !== "Alt") {
+      return;
+    }
+
+    if (altToggleArmed) {
+      menuBarVisible.value = !menuBarVisible.value;
+    }
+
+    altToggleArmed = false;
+  }
+
+  function handleWindowBlur() {
+    hideMenuBar();
   }
 
   function openContextMenu(event: MouseEvent, item: ClipboardItemRecord) {
@@ -253,7 +293,7 @@ export function useDesktopWorkbench() {
   }
 
   async function handleDelete(item: ClipboardItemRecord) {
-    if (!window.confirm(`确认删除该条历史记录？\n\n${item.preview || item.content}`)) {
+    if (!window.confirm(`确认删除这条历史记录？\n\n${item.preview || item.content}`)) {
       return;
     }
 
@@ -398,8 +438,10 @@ export function useDesktopWorkbench() {
     handleOpenEntry,
     handleRotateSession,
     handleRowClick,
+    hideMenuBar,
     items,
     loading,
+    menuBarVisible,
     moreOptions,
     openContextMenu,
     openDiagnostics,
@@ -408,7 +450,6 @@ export function useDesktopWorkbench() {
     resolvedSessionUrl,
     search,
     selectedId,
-    serverStateTone,
     tokenCountdown,
     webPanelOpen,
   };

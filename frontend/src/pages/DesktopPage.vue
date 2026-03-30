@@ -1,13 +1,12 @@
 <template>
   <div
-    class="grid min-h-screen grid-rows-[auto,minmax(0,1fr)] gap-3 p-2.5 md:p-3"
-    @click="closeContextMenu"
+    class="grid min-h-screen p-2.5 md:p-3"
+    :class="menuBarVisible ? 'grid-rows-[auto,minmax(0,1fr)] gap-3' : 'grid-rows-[minmax(0,1fr)] gap-0'"
+    @click="handleSurfaceClick"
   >
     <DesktopMenuBar
-      :app-name="bootstrap?.appName"
+      v-if="menuBarVisible"
       :available="available"
-      :device-name="bootstrap?.services.network.deviceName"
-      :server-state-tone="serverStateTone"
       @open-web="openWebPanel"
     />
 
@@ -113,8 +112,10 @@ const {
   handleOpenEntry,
   handleRotateSession,
   handleRowClick,
+  hideMenuBar,
   items,
   loading,
+  menuBarVisible,
   moreOptions,
   openContextMenu,
   openDiagnostics,
@@ -123,8 +124,12 @@ const {
   resolvedSessionUrl,
   search,
   selectedId,
-  serverStateTone,
   tokenCountdown,
   webPanelOpen,
 } = useDesktopWorkbench();
+
+function handleSurfaceClick() {
+  closeContextMenu();
+  hideMenuBar();
+}
 </script>
