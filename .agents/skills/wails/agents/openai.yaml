@@ -1,0 +1,4 @@
+interface:
+  display_name: "Wails"
+  short_description: "Work on Wails v2 desktop apps with Go and frontend coordination"
+  default_prompt: "Inspect main.go, wails.json, and the bound app methods first, then make minimal Wails-aware changes without proactively running frontend builds."

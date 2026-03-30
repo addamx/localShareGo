@@ -1,0 +1,4 @@
+interface:
+  display_name: "Go"
+  short_description: "Work on Go backend code with targeted, repo-aware changes"
+  default_prompt: "Read go.mod and nearby Go files first, then make minimal, coherent changes and use targeted Go verification when needed."
