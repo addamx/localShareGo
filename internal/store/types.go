@@ -60,12 +60,13 @@ type SaveClipboardResult struct {
 }
 
 type SessionRecord struct {
-	ID        string `json:"id"`
-	TokenHash string `json:"tokenHash"`
-	ExpiresAt int64  `json:"expiresAt"`
-	Status    string `json:"status"`
-	CreatedAt int64  `json:"createdAt"`
-	RotatedAt *int64 `json:"rotatedAt"`
+	ID          string `json:"id"`
+	TokenHash   string `json:"tokenHash"`
+	ExpiresAt   int64  `json:"expiresAt"`
+	Status      string `json:"status"`
+	CreatedAt   int64  `json:"createdAt"`
+	ActivatedAt *int64 `json:"activatedAt"`
+	RotatedAt   *int64 `json:"rotatedAt"`
 }
 
 type DeviceRecord struct {

@@ -2,7 +2,9 @@
   <section
     class="flex min-h-0 flex-col overflow-hidden rounded-[12px] border border-[rgba(20,33,27,0.12)] bg-[rgba(250,248,242,0.88)] shadow-[0_16px_48px_rgba(40,34,19,0.08)] backdrop-blur-[14px]"
   >
-    <div class="flex items-center gap-[0.55rem] border-b border-[rgba(20,33,27,0.08)] px-3 py-[0.7rem]">
+    <div
+      class="flex items-center gap-[0.55rem] border-b border-[rgba(20,33,27,0.08)] px-3 py-[0.7rem]"
+    >
       <n-input
         :value="search"
         clearable
@@ -15,7 +17,11 @@
         </template>
       </n-input>
 
-      <n-dropdown trigger="click" :options="moreOptions" @select="emit('more-select', $event)">
+      <n-dropdown
+        trigger="click"
+        :options="moreOptions"
+        @select="emit('more-select', $event)"
+      >
         <n-button quaternary circle class="!rounded-[10px]">
           <template #icon>
             <n-icon><MoreIcon class="h-[18px] w-[18px]" /></n-icon>
@@ -24,7 +30,7 @@
       </n-dropdown>
     </div>
 
-    <div class="min-h-0 overflow-auto">
+    <div ref="scroller" class="min-h-0 overflow-auto">
       <div
         v-if="loading || refreshing"
         class="flex items-center gap-[0.6rem] px-[1.1rem] py-4 text-[var(--text-muted)]"
@@ -33,11 +39,7 @@
         <span>同步中</span>
       </div>
 
-      <n-empty
-        v-else-if="items.length === 0"
-        description="暂无记录"
-        class="py-8"
-      />
+      <n-empty v-else-if="items.length === 0" description="暂无记录" class="py-8" />
 
       <template v-else>
         <button
@@ -46,13 +48,18 @@
           type="button"
           class="flex w-full flex-col gap-[0.42rem] border-0 border-b border-[rgba(20,33,27,0.08)] px-[0.9rem] py-[0.82rem] text-left transition-colors duration-150 hover:bg-[rgba(31,122,90,0.06)]"
           :class="[
-            item.id === selectedId || item.isCurrent ? 'bg-[rgba(31,122,90,0.08)]' : 'bg-transparent',
+            item.id === selectedId || item.isCurrent
+              ? 'bg-[rgba(31,122,90,0.08)]'
+              : 'bg-transparent',
             item.isCurrent ? 'shadow-[inset_2px_0_0_#1f7a5a]' : '',
           ]"
+          @mousedown.prevent
           @click.stop="emit('row-click', item)"
           @contextmenu.prevent.stop="emit('row-contextmenu', { event: $event, item })"
         >
-          <div class="flex flex-wrap items-center gap-[0.45rem] text-[0.77rem] text-[var(--text-muted)]">
+          <div
+            class="flex flex-wrap items-center gap-[0.45rem] text-[0.77rem] text-[var(--text-muted)]"
+          >
             <span>{{ formatSource(item.sourceKind) }}</span>
             <span>{{ formatDateTime(item.createdAt) }}</span>
             <span
@@ -60,12 +67,6 @@
               class="rounded-full bg-[rgba(208,138,36,0.14)] px-[0.35rem] py-[0.08rem] text-[#9a691b]"
             >
               置顶
-            </span>
-            <span
-              v-if="item.isCurrent"
-              class="rounded-full bg-[rgba(31,122,90,0.14)] px-[0.35rem] py-[0.08rem] text-[#1f7a5a]"
-            >
-              当前
             </span>
           </div>
 
@@ -81,6 +82,7 @@
 </template>
 
 <script setup lang="ts">
+import { ref } from "vue";
 import { NButton, NDropdown, NEmpty, NIcon, NInput, NSpin, type DropdownOption } from "naive-ui";
 
 import { formatDateTime, formatSource } from "../../app/formatters";
@@ -102,4 +104,18 @@ const emit = defineEmits<{
   (e: "row-contextmenu", payload: { event: MouseEvent; item: ClipboardItemRecord }): void;
   (e: "update:search", value: string): void;
 }>();
+
+const scroller = ref<HTMLElement | null>(null);
+
+defineExpose({
+  getScrollTop() {
+    return scroller.value?.scrollTop ?? 0;
+  },
+  setScrollTop(top: number) {
+    if (!scroller.value) {
+      return;
+    }
+    scroller.value.scrollTop = top;
+  },
+});
 </script>

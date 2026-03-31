@@ -81,8 +81,45 @@ export interface SessionResponse {
   maxTextBytes: number;
 }
 
+export interface OnlineDevice {
+  id: string;
+  name: string;
+  kind: string;
+}
+
+export interface DevicePresenceResponse {
+  self: OnlineDevice;
+  devices: OnlineDevice[];
+}
+
+export interface SyncClipboardRequest {
+  content: string;
+  sourceDeviceId: string;
+  targetDeviceIds: string[];
+  syncAll: boolean;
+}
+
+export interface SyncClipboardResponse {
+  deliveredDevices: OnlineDevice[];
+}
+
 export interface ClipboardRefreshEvent {
   itemId: string;
+}
+
+export interface SyncClipboardEvent {
+  targetDeviceIds: string[];
+  content: string;
+  sourceKind: string;
+  createdAt: number;
+}
+
+export interface ServerEvent {
+  kind: string;
+  scope: string;
+  itemId: string | null;
+  sync: SyncClipboardEvent | null;
+  ts: number;
 }
 
 export interface ConnectivityCheck {

@@ -34,12 +34,20 @@ export function ListClipboardItems(arg1) {
   return window['go']['main']['App']['ListClipboardItems'](arg1);
 }
 
+export function ListOnlineDevices() {
+  return window['go']['main']['App']['ListOnlineDevices']();
+}
+
 export function OpenURL(arg1) {
   return window['go']['main']['App']['OpenURL'](arg1);
 }
 
 export function RotateSessionToken() {
   return window['go']['main']['App']['RotateSessionToken']();
+}
+
+export function SyncClipboardItem(arg1, arg2, arg3) {
+  return window['go']['main']['App']['SyncClipboardItem'](arg1, arg2, arg3);
 }
 
 export function UpdateClipboardItemPin(arg1, arg2) {

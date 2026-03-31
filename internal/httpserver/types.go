@@ -1,6 +1,9 @@
 package httpserver
 
-import "localShareGo/internal/apierr"
+import (
+	"localShareGo/internal/apierr"
+	"localShareGo/internal/store"
+)
 
 type HttpServerStatus struct {
 	BindHost       string  `json:"bindHost"`
@@ -45,11 +48,51 @@ type SessionResponse struct {
 	ReadOnly         bool   `json:"readOnly"`
 }
 
+type OnlineDevice struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+	Kind string `json:"kind"`
+}
+
+type DeviceRegisterRequest struct {
+	DeviceID string `json:"deviceId"`
+	Name     string `json:"name"`
+}
+
+type DeviceHeartbeatRequest struct {
+	DeviceID string `json:"deviceId"`
+}
+
+type DevicePresenceResponse struct {
+	Self    OnlineDevice   `json:"self"`
+	Devices []OnlineDevice `json:"devices"`
+}
+
+type SyncClipboardRequest struct {
+	Content         string   `json:"content"`
+	SourceDeviceID  string   `json:"sourceDeviceId"`
+	TargetDeviceIDs []string `json:"targetDeviceIds"`
+	SyncAll         bool     `json:"syncAll"`
+}
+
+type SyncClipboardResponse struct {
+	DeliveredDevices []OnlineDevice             `json:"deliveredDevices"`
+	DesktopItem      *store.ClipboardItemRecord `json:"desktopItem"`
+}
+
+type SyncClipboardEvent struct {
+	TargetDeviceIDs []string `json:"targetDeviceIds"`
+	Content         string   `json:"content"`
+	SourceKind      string   `json:"sourceKind"`
+	CreatedAt       int64    `json:"createdAt"`
+}
+
 type ServerEvent struct {
-	Kind   string  `json:"kind"`
-	Scope  string  `json:"scope"`
-	ItemID *string `json:"itemId"`
-	TS     int64   `json:"ts"`
+	Kind   string              `json:"kind"`
+	Scope  string              `json:"scope"`
+	ItemID *string             `json:"itemId"`
+	Sync   *SyncClipboardEvent `json:"sync"`
+	TS     int64               `json:"ts"`
 }
 
 type APIEnvelope[T any] struct {

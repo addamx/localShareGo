@@ -8,6 +8,8 @@ interface DesktopAppApi {
   ClearClipboardHistory(): Promise<number>;
   RotateSessionToken(): Promise<any>;
   GetConnectivityReport(): Promise<any>;
+  ListOnlineDevices(): Promise<any[]>;
+  SyncClipboardItem(itemId: string, targetDeviceIds: string[], syncAll: boolean): Promise<any>;
   CopyText(text: string): Promise<void>;
   OpenURL(url: string): void;
 }

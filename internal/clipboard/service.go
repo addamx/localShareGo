@@ -88,6 +88,12 @@ func (c *Service) WriteText(text string) error {
 	if err := writeClipboardText(trimmed); err != nil {
 		return apierr.State(err.Error())
 	}
+
+	c.mu.Lock()
+	c.lastProcessedHash = hashText(trimmed)
+	c.lastFailedHash = ""
+	c.lastFailedAtMs = 0
+	c.mu.Unlock()
 	return nil
 }
 

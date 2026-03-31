@@ -10,7 +10,7 @@ const (
 	DefaultPreferredPort         = 8765
 	DefaultMaxTextBytes          = 65536
 	DefaultClipboardPollInterval = 800
-	DefaultTokenTTLMinutes       = 30
+	DefaultTokenTTLMinutes       = 60
 	DefaultDataFileName          = "localshare.json"
 	DefaultWebRoute              = "/web"
 )

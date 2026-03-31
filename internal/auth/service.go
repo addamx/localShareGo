@@ -20,7 +20,6 @@ type Service struct {
 	mu               sync.Mutex
 	currentSessionID string
 	currentTokenRaw  string
-	currentExpiresAt int64
 }
 
 func New(store *store.Store, tokenTTLMinutes int) *Service {
@@ -42,65 +41,24 @@ func (a *Service) EnsureSession(now int64) (store.SessionRecord, string, error) 
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
-	if a.currentTokenRaw != "" && a.currentExpiresAt > now {
-		current, err := a.store.GetSessionByHash(hashText(a.currentTokenRaw), now)
+	if a.currentTokenRaw != "" && a.currentSessionID != "" {
+		current, err := a.store.GetPendingSession(a.currentSessionID, now)
 		if err != nil {
 			return store.SessionRecord{}, "", err
 		}
-		if current != nil && current.ID == a.currentSessionID {
+		if current != nil {
 			return *current, a.currentTokenRaw, nil
 		}
 	}
 
-	active, err := a.store.GetCurrentSession(now)
-	if err != nil {
-		return store.SessionRecord{}, "", err
-	}
-
-	token := uuid.NewString()
-	tokenHash := hashText(token)
-	expiresAt := now + int64(a.tokenTTLMinutes)*60_000
-
-	var session store.SessionRecord
-	if active == nil {
-		session, err = a.store.CreateSession(tokenHash, expiresAt)
-	} else {
-		session, err = a.store.RotateSession(active.ID, tokenHash, expiresAt, now)
-	}
-	if err != nil {
-		return store.SessionRecord{}, "", err
-	}
-
-	a.currentSessionID = session.ID
-	a.currentTokenRaw = token
-	a.currentExpiresAt = session.ExpiresAt
-	return session, token, nil
+	return a.issuePendingSessionLocked(now)
 }
 
 func (a *Service) RotateSession(now int64) (store.SessionRecord, string, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
-	current, err := a.store.GetCurrentSession(now)
-	if err != nil {
-		return store.SessionRecord{}, "", err
-	}
-	if current == nil {
-		return store.SessionRecord{}, "", apierr.NotFound("no active session available to rotate")
-	}
-
-	token := uuid.NewString()
-	tokenHash := hashText(token)
-	expiresAt := now + int64(a.tokenTTLMinutes)*60_000
-	session, err := a.store.RotateSession(current.ID, tokenHash, expiresAt, now)
-	if err != nil {
-		return store.SessionRecord{}, "", err
-	}
-
-	a.currentSessionID = session.ID
-	a.currentTokenRaw = token
-	a.currentExpiresAt = session.ExpiresAt
-	return session, token, nil
+	return a.issuePendingSessionLocked(now)
 }
 
 func (a *Service) ValidateToken(token string, now int64) (store.SessionRecord, error) {
@@ -108,6 +66,10 @@ func (a *Service) ValidateToken(token string, now int64) (store.SessionRecord, e
 	if trimmed == "" {
 		return store.SessionRecord{}, apierr.Unauthorized("missing bearer token")
 	}
+
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
 	session, err := a.store.GetSessionByHash(hashText(trimmed), now)
 	if err != nil {
 		return store.SessionRecord{}, err
@@ -115,7 +77,26 @@ func (a *Service) ValidateToken(token string, now int64) (store.SessionRecord, e
 	if session == nil {
 		return store.SessionRecord{}, apierr.Unauthorized("invalid or expired token")
 	}
-	return *session, nil
+	if session.Status != "pending" {
+		return *session, nil
+	}
+
+	activated, err := a.store.ActivateSession(
+		session.ID,
+		now+int64(a.tokenTTLMinutes)*60_000,
+		now,
+	)
+	if err != nil {
+		return store.SessionRecord{}, err
+	}
+
+	if a.currentSessionID == activated.ID {
+		if _, _, err := a.issuePendingSessionLocked(now); err != nil {
+			return store.SessionRecord{}, err
+		}
+	}
+
+	return activated, nil
 }
 
 func (a *Service) CurrentToken() string {
@@ -137,6 +118,19 @@ func (a *Service) CurrentSessionSnapshot(session store.SessionRecord, publicHost
 		BearerHeaderName: "Authorization",
 		TokenQueryKey:    "token",
 	}
+}
+
+func (a *Service) issuePendingSessionLocked(now int64) (store.SessionRecord, string, error) {
+	token := uuid.NewString()
+	tokenHash := hashText(token)
+	session, err := a.store.ReplacePendingSession(tokenHash, now)
+	if err != nil {
+		return store.SessionRecord{}, "", err
+	}
+
+	a.currentSessionID = session.ID
+	a.currentTokenRaw = token
+	return session, token, nil
 }
 
 func BuildAccessURL(publicHost string, publicPort int, webBasePath, token string) string {

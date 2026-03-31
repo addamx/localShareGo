@@ -10,6 +10,7 @@ import (
 	"localShareGo/internal/apierr"
 	"localShareGo/internal/auth"
 	"localShareGo/internal/clipboard"
+	"localShareGo/internal/httpserver"
 	"localShareGo/internal/runtimeapp"
 	"localShareGo/internal/store"
 )
@@ -76,12 +77,16 @@ func (a *App) ActivateClipboardItem(itemID string) (store.ClipboardItemRecord, e
 	if err := a.mustRuntime().Clipboard().WriteText(item.Content); err != nil {
 		return store.ClipboardItemRecord{}, err
 	}
-	activated, err := a.mustRuntime().Store().ActivateClipboardItem(itemID)
+	activated, err := a.mustRuntime().Store().ReplaceClipboardItemWithCurrent(
+		itemID,
+		"desktop_local",
+		optionalString(a.mustRuntime().OnlineDeviceID()),
+	)
 	if err != nil {
 		return store.ClipboardItemRecord{}, err
 	}
 	a.emitClipboardEvent(clipboard.RefreshEvent{
-		ItemID:       itemID,
+		ItemID:       activated.ID,
 		IsCurrent:    true,
 		SourceKind:   activated.SourceKind,
 		ObservedAtMs: nowMs(),
@@ -131,6 +136,22 @@ func (a *App) RotateSessionToken() (auth.SessionSnapshot, error) {
 
 func (a *App) GetConnectivityReport() (runtimeapp.ConnectivityReport, error) {
 	return a.mustRuntime().GetConnectivityReport()
+}
+
+func (a *App) ListOnlineDevices() []httpserver.OnlineDevice {
+	return a.mustRuntime().HTTP().ListOnlineDevices(a.mustRuntime().OnlineDeviceID())
+}
+
+func (a *App) SyncClipboardItem(itemID string, targetDeviceIDs []string, syncAll bool) (httpserver.SyncClipboardResponse, error) {
+	item, err := a.mustRuntime().Store().GetClipboardItem(itemID)
+	if err != nil {
+		return httpserver.SyncClipboardResponse{}, err
+	}
+	if item == nil {
+		return httpserver.SyncClipboardResponse{}, apierr.NotFound(fmt.Sprintf("clipboard item `%s` not found", itemID))
+	}
+
+	return a.mustRuntime().HTTP().SyncClipboardContent(item.Content, a.mustRuntime().OnlineDeviceID(), targetDeviceIDs, syncAll)
 }
 
 func (a *App) CopyText(text string) error {

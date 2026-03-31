@@ -1,6 +1,5 @@
 import { createRouter, createWebHistory } from "vue-router";
 
-import DesktopPage from "../pages/DesktopPage.vue";
 import HomePage from "../pages/HomePage.vue";
 import WebPage from "../pages/WebPage.vue";
 
@@ -16,7 +15,7 @@ export function createWorkbenchRouter() {
       {
         path: "/desktop",
         name: "desktop",
-        component: DesktopPage,
+        component: () => import("../pages/DesktopPage.vue"),
       },
       {
         path: "/web",

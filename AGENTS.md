@@ -1,11 +1,12 @@
 # COMMON
-- 不主动执行npm run build
+- 不主动执行 build
 - 不主动创建测试用例
 - 不主动创建文档
-- 写入AGENTS的内容需精炼且准确
+- 写入 AGENTS 的内容需精炼且准确
+- 单个文件的代码不宜过大，尽量不超过 500 行，特别是页面组件
 
 # AGENT
-- skill统一只安装到.agents/skills目录下
+- skill 统一只安装到 `.agents/skills` 目录下
 
 # STRUCTURE
 ```text
@@ -49,3 +50,9 @@
 - 平台相关实现集中在领域目录下的 `*_windows.go` / `*_other.go`，不要散落
 
 # PITFALLS
+- Web 开发态下 `/web` 走 Vite 代理，生产环境继续走 `frontend/dist`
+- Web 路由不要静态引入桌面页、`desktopWorkbench` 或 `wailsjs` 依赖；桌面页默认用路由懒加载，避免 Web 端请求 `/wailsjs/*`
+
+# FRONTEND
+- 样式优先使用 Tailwind，其次 SCSS
+- 浏览器storage使用localForage

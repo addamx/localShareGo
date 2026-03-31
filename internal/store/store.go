@@ -165,6 +165,57 @@ func (s *Store) CreateSession(tokenHash string, expiresAt int64) (SessionRecord,
 	return session, s.saveLocked()
 }
 
+func (s *Store) ReplacePendingSession(tokenHash string, createdAt int64) (SessionRecord, error) {
+	if strings.TrimSpace(tokenHash) == "" {
+		return SessionRecord{}, apierr.InvalidArgument("token hash cannot be empty")
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	expireSessionsLocked(&s.data.Sessions, createdAt)
+	for index, item := range s.data.Sessions {
+		if item.Status != "pending" {
+			continue
+		}
+		item.Status = "rotated"
+		item.RotatedAt = &createdAt
+		s.data.Sessions[index] = item
+	}
+
+	session := SessionRecord{
+		ID:        uuid.NewString(),
+		TokenHash: tokenHash,
+		ExpiresAt: 0,
+		Status:    "pending",
+		CreatedAt: createdAt,
+	}
+	s.data.Sessions = append(s.data.Sessions, session)
+	return session, s.saveLocked()
+}
+
+func (s *Store) GetPendingSession(sessionID string, now int64) (*SessionRecord, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	expireSessionsLocked(&s.data.Sessions, now)
+	for _, item := range s.data.Sessions {
+		if item.ID != sessionID || item.Status != "pending" {
+			continue
+		}
+		copy := item
+		if err := s.saveLocked(); err != nil {
+			return nil, err
+		}
+		return &copy, nil
+	}
+
+	if err := s.saveLocked(); err != nil {
+		return nil, err
+	}
+	return nil, nil
+}
+
 func (s *Store) GetCurrentSession(now int64) (*SessionRecord, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -196,7 +247,15 @@ func (s *Store) GetSessionByHash(tokenHash string, now int64) (*SessionRecord, e
 	expireSessionsLocked(&s.data.Sessions, now)
 	var current *SessionRecord
 	for _, item := range s.data.Sessions {
-		if item.TokenHash != tokenHash || item.Status != "active" || item.ExpiresAt <= now {
+		if item.TokenHash != tokenHash {
+			continue
+		}
+		if item.Status == "pending" {
+			copy := item
+			current = &copy
+			break
+		}
+		if item.Status != "active" || item.ExpiresAt <= now {
 			continue
 		}
 		copy := item
@@ -210,6 +269,32 @@ func (s *Store) GetSessionByHash(tokenHash string, now int64) (*SessionRecord, e
 	}
 
 	return current, nil
+}
+
+func (s *Store) ActivateSession(sessionID string, expiresAt, activatedAt int64) (SessionRecord, error) {
+	if strings.TrimSpace(sessionID) == "" {
+		return SessionRecord{}, apierr.InvalidArgument("session id cannot be empty")
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	expireSessionsLocked(&s.data.Sessions, activatedAt)
+	for index, item := range s.data.Sessions {
+		if item.ID != sessionID {
+			continue
+		}
+		if item.Status != "pending" {
+			return SessionRecord{}, apierr.InvalidArgument("session is not pending")
+		}
+		item.Status = "active"
+		item.ExpiresAt = expiresAt
+		item.ActivatedAt = &activatedAt
+		s.data.Sessions[index] = item
+		return item, s.saveLocked()
+	}
+
+	return SessionRecord{}, apierr.NotFound(fmt.Sprintf("pending session `%s` not found", sessionID))
 }
 
 func (s *Store) RotateSession(currentSessionID, nextTokenHash string, expiresAt, rotatedAt int64) (SessionRecord, error) {
@@ -420,6 +505,50 @@ func (s *Store) ActivateClipboardItem(itemID string) (ClipboardItemRecord, error
 	item.UpdatedAt = now
 	s.data.ClipboardItems[found] = item
 	return item, s.saveLocked()
+}
+
+func (s *Store) ReplaceClipboardItemWithCurrent(itemID, sourceKind string, sourceDeviceID *string) (ClipboardItemRecord, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	now := nowMs()
+	found := -1
+	for index, item := range s.data.ClipboardItems {
+		if item.DeletedAt == nil && item.IsCurrent {
+			item.IsCurrent = false
+			item.UpdatedAt = now
+			s.data.ClipboardItems[index] = item
+		}
+		if item.ID == itemID && item.DeletedAt == nil {
+			found = index
+		}
+	}
+	if found < 0 {
+		return ClipboardItemRecord{}, apierr.NotFound(fmt.Sprintf("clipboard item `%s` not found", itemID))
+	}
+
+	replaced := s.data.ClipboardItems[found]
+	replaced.DeletedAt = &now
+	replaced.IsCurrent = false
+	replaced.UpdatedAt = now
+	s.data.ClipboardItems[found] = replaced
+
+	record := ClipboardItemRecord{
+		ID:             uuid.NewString(),
+		Content:        replaced.Content,
+		ContentType:    replaced.ContentType,
+		Hash:           replaced.Hash,
+		Preview:        replaced.Preview,
+		CharCount:      replaced.CharCount,
+		SourceKind:     sourceKind,
+		SourceDeviceID: sourceDeviceID,
+		Pinned:         replaced.Pinned,
+		IsCurrent:      true,
+		CreatedAt:      now,
+		UpdatedAt:      now,
+	}
+	s.data.ClipboardItems = append(s.data.ClipboardItems, record)
+	return record, s.saveLocked()
 }
 
 func (s *Store) UpdateClipboardItemPin(itemID string, pinned bool) (ClipboardItemRecord, error) {

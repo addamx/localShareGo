@@ -9,6 +9,9 @@ import (
 	"io/fs"
 	"net"
 	"net/http"
+	"net/http/httputil"
+	"net/url"
+	"os"
 	"path"
 	"strings"
 	"sync"
@@ -19,6 +22,7 @@ import (
 	"localShareGo/internal/clipboard"
 	"localShareGo/internal/config"
 	"localShareGo/internal/network"
+	"localShareGo/internal/presence"
 	"localShareGo/internal/store"
 )
 
@@ -74,6 +78,9 @@ type HTTPServer struct {
 	clipboard          *clipboard.Service
 	network            *network.Service
 	assets             fs.FS
+	frontendDevProxy   *httputil.ReverseProxy
+	presence           *presence.Registry
+	desktopDeviceID    string
 	broker             *EventBroker
 	onClipboardRefresh func(clipboard.RefreshEvent)
 	mu                 sync.RWMutex
@@ -83,10 +90,20 @@ type HTTPServer struct {
 	server             *http.Server
 }
 
-func New(appConfig config.RuntimeConfig, dataStore *store.Store, authService *auth.Service, clipboardService *clipboard.Service, networkService *network.Service, assets embed.FS, onClipboardRefresh func(clipboard.RefreshEvent)) (*HTTPServer, error) {
+func New(appConfig config.RuntimeConfig, dataStore *store.Store, authService *auth.Service, clipboardService *clipboard.Service, networkService *network.Service, assets embed.FS, presenceRegistry *presence.Registry, desktopDeviceID string, onClipboardRefresh func(clipboard.RefreshEvent)) (*HTTPServer, error) {
 	assetFS, err := fs.Sub(assets, "frontend/dist")
 	if err != nil {
 		return nil, err
+	}
+
+	var frontendDevProxy *httputil.ReverseProxy
+	frontendDevServerURL := strings.TrimSpace(os.Getenv("frontenddevserverurl"))
+	if frontendDevServerURL != "" {
+		target, err := url.Parse(frontendDevServerURL)
+		if err != nil {
+			return nil, err
+		}
+		frontendDevProxy = httputil.NewSingleHostReverseProxy(target)
 	}
 
 	return &HTTPServer{
@@ -96,6 +113,9 @@ func New(appConfig config.RuntimeConfig, dataStore *store.Store, authService *au
 		clipboard:          clipboardService,
 		network:            networkService,
 		assets:             assetFS,
+		frontendDevProxy:   frontendDevProxy,
+		presence:           presenceRegistry,
+		desktopDeviceID:    desktopDeviceID,
 		broker:             newEventBroker(),
 		onClipboardRefresh: onClipboardRefresh,
 		state:              "stopped",
@@ -206,14 +226,27 @@ func (s *HTTPServer) routes() http.Handler {
 	mux.HandleFunc("/api/v1/health", s.handleHealth)
 	mux.HandleFunc("/api/v1/session", s.handleSession)
 	mux.HandleFunc("/api/v1/session/rotate-token", s.handleRotateToken)
+	mux.HandleFunc("/api/v1/devices/register", s.handleRegisterDevice)
+	mux.HandleFunc("/api/v1/devices/heartbeat", s.handleHeartbeatDevice)
 	mux.HandleFunc("/api/v1/clipboard-items", s.handleClipboardCollection)
 	mux.HandleFunc("/api/v1/clipboard-items/clear", s.handleClearClipboardHistory)
 	mux.HandleFunc("/api/v1/clipboard-items/", s.handleClipboardItem)
+	mux.HandleFunc("/api/v1/clipboard-sync", s.handleSyncClipboard)
 	mux.HandleFunc("/api/v1/events", s.handleEvents)
 	return mux
 }
 
 func (s *HTTPServer) handleRoot(writer http.ResponseWriter, request *http.Request) {
+	if s.frontendDevProxy != nil && strings.EqualFold(request.Header.Get("Upgrade"), "websocket") {
+		s.proxyFrontendDevRequest(writer, request, request.URL.Path)
+		return
+	}
+
+	if s.shouldProxyFrontendDevAsset(request.URL.Path) {
+		s.proxyFrontendDevRequest(writer, request, request.URL.Path)
+		return
+	}
+
 	if request.URL.Path != "/" {
 		http.NotFound(writer, request)
 		return
@@ -237,6 +270,11 @@ func (s *HTTPServer) handleWebIndex(writer http.ResponseWriter, request *http.Re
 		return
 	}
 
+	if s.frontendDevProxy != nil {
+		s.proxyFrontendDevRequest(writer, request, "/")
+		return
+	}
+
 	content, err := fs.ReadFile(s.assets, "index.html")
 	if err != nil {
 		writeAPIError(writer, apierr.WrapInternal("failed to read web assets", err))
@@ -246,6 +284,46 @@ func (s *HTTPServer) handleWebIndex(writer http.ResponseWriter, request *http.Re
 	writer.Header().Set("Content-Type", "text/html; charset=utf-8")
 	writer.Header().Set("Cache-Control", "no-cache")
 	_, _ = writer.Write(content)
+}
+
+func (s *HTTPServer) shouldProxyFrontendDevAsset(requestPath string) bool {
+	if s.frontendDevProxy == nil {
+		return false
+	}
+
+	if requestPath == "/vite.svg" {
+		return true
+	}
+
+	for _, prefix := range []string{"/@vite/", "/@id/", "/@fs/", "/@react-refresh", "/__vite", "/src/", "/node_modules/"} {
+		if strings.HasPrefix(requestPath, prefix) {
+			return true
+		}
+	}
+
+	return false
+}
+
+func (s *HTTPServer) proxyFrontendDevRequest(writer http.ResponseWriter, request *http.Request, targetPath string) {
+	if s.frontendDevProxy == nil {
+		http.NotFound(writer, request)
+		return
+	}
+
+	proxyRequest := request.Clone(request.Context())
+	proxyRequest.URL = cloneURL(request.URL)
+	proxyRequest.URL.Path = targetPath
+	proxyRequest.URL.RawPath = targetPath
+	s.frontendDevProxy.ServeHTTP(writer, proxyRequest)
+}
+
+func cloneURL(source *url.URL) *url.URL {
+	if source == nil {
+		return &url.URL{}
+	}
+
+	clone := *source
+	return &clone
 }
 
 func (s *HTTPServer) handleHealth(writer http.ResponseWriter, _ *http.Request) {
@@ -299,6 +377,57 @@ func (s *HTTPServer) handleRotateToken(writer http.ResponseWriter, request *http
 
 	s.PublishRefresh("session", nil)
 	writeAPIResponse(writer, http.StatusOK, s.buildSessionResponse(session))
+}
+
+func (s *HTTPServer) handleRegisterDevice(writer http.ResponseWriter, request *http.Request) {
+	if request.Method != http.MethodPost {
+		writer.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	if _, err := s.authorizeRequest(request); err != nil {
+		writeAPIError(writer, err)
+		return
+	}
+
+	var payload DeviceRegisterRequest
+	if err := json.NewDecoder(request.Body).Decode(&payload); err != nil {
+		writeAPIError(writer, apierr.InvalidArgument("invalid request body"))
+		return
+	}
+
+	device := s.presence.RegisterWithID(payload.DeviceID, payload.Name, presence.KindWeb)
+	writeAPIResponse(writer, http.StatusOK, DevicePresenceResponse{
+		Self:    s.buildOnlineDevice(device),
+		Devices: s.listOnlineDevices(device.ID),
+	})
+}
+
+func (s *HTTPServer) handleHeartbeatDevice(writer http.ResponseWriter, request *http.Request) {
+	if request.Method != http.MethodPost {
+		writer.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	if _, err := s.authorizeRequest(request); err != nil {
+		writeAPIError(writer, err)
+		return
+	}
+
+	var payload DeviceHeartbeatRequest
+	if err := json.NewDecoder(request.Body).Decode(&payload); err != nil {
+		writeAPIError(writer, apierr.InvalidArgument("invalid request body"))
+		return
+	}
+
+	device, ok := s.presence.Touch(payload.DeviceID)
+	if !ok {
+		writeAPIError(writer, apierr.NotFound("device is offline"))
+		return
+	}
+
+	writeAPIResponse(writer, http.StatusOK, DevicePresenceResponse{
+		Self:    s.buildOnlineDevice(device),
+		Devices: s.listOnlineDevices(device.ID),
+	})
 }
 
 func (s *HTTPServer) handleClipboardCollection(writer http.ResponseWriter, request *http.Request) {
@@ -386,6 +515,31 @@ func (s *HTTPServer) handleClipboardCollection(writer http.ResponseWriter, reque
 	default:
 		writer.WriteHeader(http.StatusMethodNotAllowed)
 	}
+}
+
+func (s *HTTPServer) handleSyncClipboard(writer http.ResponseWriter, request *http.Request) {
+	if request.Method != http.MethodPost {
+		writer.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	if _, err := s.authorizeRequest(request); err != nil {
+		writeAPIError(writer, err)
+		return
+	}
+
+	var payload SyncClipboardRequest
+	if err := json.NewDecoder(request.Body).Decode(&payload); err != nil {
+		writeAPIError(writer, apierr.InvalidArgument("invalid request body"))
+		return
+	}
+
+	result, err := s.SyncClipboardContent(payload.Content, payload.SourceDeviceID, payload.TargetDeviceIDs, payload.SyncAll)
+	if err != nil {
+		writeAPIError(writer, err)
+		return
+	}
+
+	writeAPIResponse(writer, http.StatusOK, result)
 }
 
 func (s *HTTPServer) handleClipboardItem(writer http.ResponseWriter, request *http.Request) {
@@ -573,8 +727,129 @@ func (s *HTTPServer) handleEvents(writer http.ResponseWriter, request *http.Requ
 	}
 }
 
+func (s *HTTPServer) ListOnlineDevices(excludeIDs ...string) []OnlineDevice {
+	return s.listOnlineDevices(excludeIDs...)
+}
+
+func (s *HTTPServer) SyncClipboardContent(content, sourceDeviceID string, targetDeviceIDs []string, syncAll bool) (SyncClipboardResponse, error) {
+	trimmed := strings.TrimSpace(content)
+	if trimmed == "" {
+		return SyncClipboardResponse{}, apierr.InvalidArgument("clipboard content cannot be empty")
+	}
+
+	sourceName := "Unknown Device"
+	if sourceDeviceID != "" {
+		source, ok := s.presence.Touch(sourceDeviceID)
+		if ok {
+			sourceName = source.Name
+		}
+	}
+
+	targets := s.resolveSyncTargets(sourceDeviceID, targetDeviceIDs, syncAll)
+	if len(targets) == 0 {
+		return SyncClipboardResponse{}, apierr.InvalidArgument("no target devices selected")
+	}
+
+	response := SyncClipboardResponse{
+		DeliveredDevices: make([]OnlineDevice, 0, len(targets)),
+	}
+	webTargetIDs := make([]string, 0, len(targets))
+
+	for _, target := range targets {
+		response.DeliveredDevices = append(response.DeliveredDevices, s.buildOnlineDevice(target))
+
+		if target.ID == s.desktopDeviceID {
+			item, err := s.store.SaveClipboardItem(store.SaveClipboardInput{
+				Content:     trimmed,
+				SourceKind:  sourceName,
+				Pinned:      false,
+				MarkCurrent: false,
+			}, s.config.ClipboardPollInterval, s.config.MaxTextBytes)
+			if err != nil {
+				return SyncClipboardResponse{}, err
+			}
+
+			copy := item.Item
+			response.DesktopItem = &copy
+			s.PublishRefresh("clipboard", &item.Item.ID)
+			if s.onClipboardRefresh != nil {
+				s.onClipboardRefresh(clipboard.RefreshEvent{
+					ItemID:         item.Item.ID,
+					Created:        item.Created,
+					ReusedExisting: item.ReusedExisting,
+					IsCurrent:      item.Item.IsCurrent,
+					SourceKind:     item.Item.SourceKind,
+					ObservedAtMs:   nowMs(),
+				})
+			}
+			continue
+		}
+
+		webTargetIDs = append(webTargetIDs, target.ID)
+	}
+
+	if len(webTargetIDs) > 0 {
+		s.broker.publish(ServerEvent{
+			Kind:  "sync",
+			Scope: "clipboard",
+			Sync: &SyncClipboardEvent{
+				TargetDeviceIDs: webTargetIDs,
+				Content:         trimmed,
+				SourceKind:      sourceName,
+				CreatedAt:       nowMs(),
+			},
+			TS: nowMs(),
+		})
+	}
+
+	return response, nil
+}
+
 func (s *HTTPServer) authorizeRequest(request *http.Request) (store.SessionRecord, error) {
 	return s.auth.ValidateToken(extractToken(request), nowMs())
+}
+
+func (s *HTTPServer) listOnlineDevices(excludeIDs ...string) []OnlineDevice {
+	devices := s.presence.List(excludeIDs...)
+	items := make([]OnlineDevice, 0, len(devices))
+	for _, device := range devices {
+		items = append(items, s.buildOnlineDevice(device))
+	}
+	return items
+}
+
+func (s *HTTPServer) buildOnlineDevice(device presence.Device) OnlineDevice {
+	return OnlineDevice{
+		ID:   device.ID,
+		Name: device.Name,
+		Kind: device.Kind,
+	}
+}
+
+func (s *HTTPServer) resolveSyncTargets(sourceDeviceID string, targetDeviceIDs []string, syncAll bool) []presence.Device {
+	if syncAll {
+		return s.presence.List(sourceDeviceID)
+	}
+
+	seen := make(map[string]struct{}, len(targetDeviceIDs))
+	targets := make([]presence.Device, 0, len(targetDeviceIDs))
+	for _, item := range targetDeviceIDs {
+		trimmed := strings.TrimSpace(item)
+		if trimmed == "" || trimmed == sourceDeviceID {
+			continue
+		}
+		if _, ok := seen[trimmed]; ok {
+			continue
+		}
+		seen[trimmed] = struct{}{}
+
+		target, ok := s.presence.Get(trimmed)
+		if !ok {
+			continue
+		}
+		targets = append(targets, target)
+	}
+	return targets
 }
 
 func (s *HTTPServer) buildSessionResponse(session store.SessionRecord) SessionResponse {

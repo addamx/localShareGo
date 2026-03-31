@@ -21,6 +21,7 @@
     </section>
 
     <DesktopClipboardList
+      ref="clipboardListRef"
       v-else
       :items="items"
       :loading="loading"
@@ -30,7 +31,7 @@
       :selected-id="selectedId"
       @update:search="search = $event"
       @more-select="handleMoreSelect"
-      @row-click="handleRowClick"
+      @row-click="handleClipboardRowClick"
       @row-contextmenu="openContextMenu($event.event, $event.item)"
     />
 
@@ -78,6 +79,7 @@
 </template>
 
 <script setup lang="ts">
+import { nextTick, ref } from "vue";
 import { NDropdown } from "naive-ui";
 
 import DesktopClipboardList from "../components/desktop/DesktopClipboardList.vue";
@@ -127,6 +129,18 @@ const {
   tokenCountdown,
   webPanelOpen,
 } = useDesktopWorkbench();
+
+const clipboardListRef = ref<InstanceType<typeof DesktopClipboardList> | null>(null);
+
+async function handleClipboardRowClick(item: (typeof items.value)[number]) {
+  const scrollTop = clipboardListRef.value?.getScrollTop() ?? 0;
+  await handleRowClick(item);
+  await nextTick();
+  clipboardListRef.value?.setScrollTop(scrollTop);
+  window.requestAnimationFrame(() => {
+    clipboardListRef.value?.setScrollTop(scrollTop);
+  });
+}
 
 function handleSurfaceClick() {
   closeContextMenu();

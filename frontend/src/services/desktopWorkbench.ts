@@ -6,6 +6,8 @@ import type {
   ClipboardItemRecord,
   ClipboardListQuery,
   ConnectivityReport,
+  OnlineDevice,
+  SyncClipboardResponse,
 } from "../types/workbench";
 
 export const desktopWorkbench = {
@@ -35,6 +37,12 @@ export const desktopWorkbench = {
   },
   getConnectivityReport() {
     return desktopApp!.GetConnectivityReport() as Promise<ConnectivityReport>;
+  },
+  listOnlineDevices() {
+    return desktopApp!.ListOnlineDevices() as Promise<OnlineDevice[]>;
+  },
+  syncClipboardItem(itemId: string, targetDeviceIds: string[], syncAll: boolean) {
+    return desktopApp!.SyncClipboardItem(itemId, targetDeviceIds, syncAll) as Promise<SyncClipboardResponse>;
   },
   openURL(url: string) {
     return Promise.resolve(desktopApp!.OpenURL(url));

@@ -9,6 +9,7 @@ import type {
   AppBootstrap,
   ClipboardItemRecord,
   ConnectivityReport,
+  OnlineDevice,
 } from "../types/workbench";
 
 const preferredHostStorageKey = "localsharego:web-entry-host";
@@ -37,17 +38,18 @@ export function useDesktopWorkbench() {
   const contextMenuX = ref(0);
   const contextMenuY = ref(0);
   const contextMenuItem = ref<ClipboardItemRecord | null>(null);
+  const onlineDevices = ref<OnlineDevice[]>([]);
 
-  const detailItem = computed(
-    () => items.value.find((item) => item.id === detailItemId.value) ?? null,
-  );
+  const detailItem = computed(() => items.value.find((item) => item.id === detailItemId.value) ?? null);
   const sessionPort = computed(() => {
     const server = bootstrap.value?.services.httpServer;
     return server ? (server.effectivePort ?? server.preferredPort) : 0;
   });
   const bindAddress = computed(() => {
     const server = bootstrap.value?.services.httpServer;
-    if (!server) return "--";
+    if (!server) {
+      return "--";
+    }
     return `${server.bindHost}:${sessionPort.value}`;
   });
   const baseAccessUrl = computed(() => bootstrap.value?.services.session.accessUrl ?? "");
@@ -60,11 +62,15 @@ export function useDesktopWorkbench() {
     return uniqueStrings([baseHost, ...bootstrap.value.services.network.accessHosts]);
   });
   const activeHost = computed(() => {
-    if (selectedHost.value) return selectedHost.value;
+    if (selectedHost.value) {
+      return selectedHost.value;
+    }
     return candidateHosts.value[0] ?? "";
   });
   const resolvedSessionUrl = computed(() => {
-    if (!baseAccessUrl.value) return "";
+    if (!baseAccessUrl.value) {
+      return "";
+    }
 
     const url = new URL(baseAccessUrl.value);
     if (activeHost.value) {
@@ -91,12 +97,26 @@ export function useDesktopWorkbench() {
   ]);
   const contextMenuOptions = computed<DropdownOption[]>(() => {
     const item = contextMenuItem.value;
-    if (!item) return [];
+    if (!item) {
+      return [];
+    }
+
+    const syncChildren: DropdownOption[] =
+      onlineDevices.value.length === 0
+        ? [{ label: "暂无在线设备", key: "sync:none", disabled: true }]
+        : [
+            { label: "同步到全部", key: "sync:all" },
+            ...onlineDevices.value.map((device) => ({
+              label: device.name,
+              key: `sync:${device.id}`,
+            })),
+          ];
 
     return [
       { label: item.pinned ? "取消置顶" : "置顶", key: "pin" },
-      { label: "删除", key: "delete" },
+      { label: "同步", key: "sync", children: syncChildren },
       { label: "查看", key: "view" },
+      { label: "删除", key: "delete" },
     ];
   });
 
@@ -133,7 +153,7 @@ export function useDesktopWorkbench() {
 
     try {
       await loadBootstrap();
-      await refreshHistory(true);
+      await Promise.all([refreshHistory(true), refreshOnlineDevices()]);
     } finally {
       loading.value = false;
     }
@@ -160,7 +180,9 @@ export function useDesktopWorkbench() {
   }
 
   async function refreshHistory(silent: boolean) {
-    if (!available) return;
+    if (!available) {
+      return;
+    }
 
     refreshing.value = true;
     closeContextMenu();
@@ -184,7 +206,7 @@ export function useDesktopWorkbench() {
       }
 
       if (!silent) {
-        message.success("历史已刷新");
+        message.success("剪贴板已刷新");
       }
     } catch (error) {
       message.error(describeError(error));
@@ -193,13 +215,26 @@ export function useDesktopWorkbench() {
     }
   }
 
+  async function refreshOnlineDevices() {
+    if (!available) {
+      return;
+    }
+
+    try {
+      onlineDevices.value = await desktopWorkbench.listOnlineDevices();
+    } catch (error) {
+      message.error(describeError(error));
+    }
+  }
+
   async function handleRowClick(item: ClipboardItemRecord) {
     selectedId.value = item.id;
     await handleActivate(item.id, false);
   }
 
-  function openWebPanel() {
+  async function openWebPanel() {
     hideMenuBar();
+    await loadBootstrap();
     webPanelOpen.value = true;
   }
 
@@ -240,6 +275,7 @@ export function useDesktopWorkbench() {
   }
 
   function openContextMenu(event: MouseEvent, item: ClipboardItemRecord) {
+    void refreshOnlineDevices();
     selectedId.value = item.id;
     contextMenuItem.value = item;
     contextMenuX.value = event.clientX;
@@ -249,12 +285,15 @@ export function useDesktopWorkbench() {
 
   function closeContextMenu() {
     contextMenuOpen.value = false;
+    contextMenuItem.value = null;
   }
 
   async function handleContextSelect(key: string | number) {
     const item = contextMenuItem.value;
     closeContextMenu();
-    if (!item) return;
+    if (!item) {
+      return;
+    }
 
     if (key === "pin") {
       await handlePin(item);
@@ -267,6 +306,19 @@ export function useDesktopWorkbench() {
     if (key === "view") {
       detailItemId.value = item.id;
       detailPanelOpen.value = true;
+      return;
+    }
+    if (key === "sync:all") {
+      await handleSync(item, [], true);
+      return;
+    }
+
+    const textKey = String(key);
+    if (textKey.startsWith("sync:")) {
+      const targetDeviceID = textKey.slice(5);
+      if (targetDeviceID) {
+        await handleSync(item, [targetDeviceID], false);
+      }
     }
   }
 
@@ -293,7 +345,7 @@ export function useDesktopWorkbench() {
   }
 
   async function handleDelete(item: ClipboardItemRecord) {
-    if (!window.confirm(`确认删除这条历史记录？\n\n${item.preview || item.content}`)) {
+    if (!window.confirm(`确认删除这条记录？\n\n${item.preview || item.content}`)) {
       return;
     }
 
@@ -310,25 +362,47 @@ export function useDesktopWorkbench() {
     }
   }
 
+  async function handleSync(item: ClipboardItemRecord, targetDeviceIds: string[], syncAll: boolean) {
+    try {
+      const result = await desktopWorkbench.syncClipboardItem(item.id, targetDeviceIds, syncAll);
+      if (result.deliveredDevices.length === 0) {
+        message.warning("没有可同步的目标设备");
+        return;
+      }
+      message.success(`已同步到 ${result.deliveredDevices.length} 个设备`);
+      await refreshOnlineDevices();
+    } catch (error) {
+      message.error(describeError(error));
+    }
+  }
+
   async function handleDeleteDetail() {
-    if (!detailItem.value) return;
+    if (!detailItem.value) {
+      return;
+    }
     await handleDelete(detailItem.value);
   }
 
   async function handleCopyDetail() {
-    if (!detailItem.value) return;
+    if (!detailItem.value) {
+      return;
+    }
     await copyText(detailItem.value.content);
     message.success("内容已复制");
   }
 
   async function handleCopyEntry() {
-    if (!resolvedSessionUrl.value) return;
+    if (!resolvedSessionUrl.value) {
+      return;
+    }
     await copyText(resolvedSessionUrl.value);
     message.success("链接已复制");
   }
 
   async function handleOpenEntry() {
-    if (!resolvedSessionUrl.value) return;
+    if (!resolvedSessionUrl.value) {
+      return;
+    }
 
     try {
       await desktopWorkbench.openURL(resolvedSessionUrl.value);
@@ -347,7 +421,7 @@ export function useDesktopWorkbench() {
     try {
       await desktopWorkbench.rotateSessionToken();
       await loadBootstrap();
-      message.success("令牌已轮换");
+      message.success("会话令牌已轮换");
     } catch (error) {
       message.error(describeError(error));
     }
@@ -461,11 +535,14 @@ function resolveCandidateHosts(appBootstrap: AppBootstrap) {
 }
 
 function formatTokenCountdown(expiresAt: number | null, now: number) {
-  if (!expiresAt) return "--";
+  if (!expiresAt) {
+    return "待访问";
+  }
 
   const remaining = expiresAt - now;
-  if (remaining <= 0) return "已过期";
-
+  if (remaining <= 0) {
+    return "已过期";
+  }
   if (remaining > 60_000) {
     return `${Math.max(1, Math.floor(remaining / 60_000))}m`;
   }

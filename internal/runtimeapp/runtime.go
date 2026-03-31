@@ -18,6 +18,7 @@ import (
 	"localShareGo/internal/config"
 	"localShareGo/internal/httpserver"
 	"localShareGo/internal/network"
+	"localShareGo/internal/presence"
 	"localShareGo/internal/store"
 )
 
@@ -30,6 +31,8 @@ type AppRuntime struct {
 	clipboard *clipboard.Service
 	http      *httpserver.HTTPServer
 	deviceID  string
+	presence  *presence.Registry
+	onlineID  string
 }
 
 func New(ctx context.Context, assets embed.FS) (*AppRuntime, error) {
@@ -49,6 +52,8 @@ func New(ctx context.Context, assets embed.FS) (*AppRuntime, error) {
 	if err != nil {
 		return nil, err
 	}
+	presenceRegistry := presence.New(45 * time.Second)
+	onlineDevice := presenceRegistry.Register(networkService.DeviceName(), presence.KindDesktop)
 
 	authService := auth.New(dataStore, appConfig.TokenTTLMinutes)
 	if _, _, err := authService.EnsureSession(nowMs()); err != nil {
@@ -60,7 +65,7 @@ func New(ctx context.Context, assets embed.FS) (*AppRuntime, error) {
 		wruntime.EventsEmit(ctx, clipboard.EventName, event)
 	})
 
-	server, err := httpserver.New(appConfig, dataStore, authService, clipboardService, networkService, assets, func(event clipboard.RefreshEvent) {
+	server, err := httpserver.New(appConfig, dataStore, authService, clipboardService, networkService, assets, presenceRegistry, onlineDevice.ID, func(event clipboard.RefreshEvent) {
 		wruntime.EventsEmit(ctx, clipboard.EventName, event)
 	})
 	if err != nil {
@@ -76,6 +81,8 @@ func New(ctx context.Context, assets embed.FS) (*AppRuntime, error) {
 		clipboard: clipboardService,
 		http:      server,
 		deviceID:  deviceID,
+		presence:  presenceRegistry,
+		onlineID:  onlineDevice.ID,
 	}, nil
 }
 
@@ -179,6 +186,10 @@ func (r *AppRuntime) Clipboard() *clipboard.Service {
 
 func (r *AppRuntime) HTTP() *httpserver.HTTPServer {
 	return r.http
+}
+
+func (r *AppRuntime) OnlineDeviceID() string {
+	return r.onlineID
 }
 
 func probeHost(host string, port int) ConnectivityCheck {

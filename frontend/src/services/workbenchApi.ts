@@ -4,8 +4,11 @@ import type {
   ClipboardListQuery,
   ClipboardListResponse,
   ClipboardWriteResponse,
+  DevicePresenceResponse,
   HealthResponse,
   SessionResponse,
+  SyncClipboardRequest,
+  SyncClipboardResponse,
 } from "../types/workbench";
 
 export class WorkbenchApiError extends Error {
@@ -49,6 +52,16 @@ export function createWorkbenchApiClient(origin: string, token: string) {
   return {
     health: () => request<HealthResponse>("/api/v1/health"),
     session: () => request<SessionResponse>("/api/v1/session"),
+    registerWebDevice: (name: string, deviceId: string) =>
+      request<DevicePresenceResponse>("/api/v1/devices/register", {
+        method: "POST",
+        body: JSON.stringify({ deviceId, name }),
+      }),
+    heartbeatWebDevice: (deviceId: string) =>
+      request<DevicePresenceResponse>("/api/v1/devices/heartbeat", {
+        method: "POST",
+        body: JSON.stringify({ deviceId }),
+      }),
     listClipboardItems: (query: ClipboardListQuery) => {
       const url = withToken("/api/v1/clipboard-items");
       if (query.search?.trim()) {
@@ -74,6 +87,11 @@ export function createWorkbenchApiClient(origin: string, token: string) {
         `/api/v1/clipboard-items/${encodeURIComponent(itemId)}/activate`,
         { method: "POST" },
       ),
+    syncClipboard: (payload: SyncClipboardRequest) =>
+      request<SyncClipboardResponse>("/api/v1/clipboard-sync", {
+        method: "POST",
+        body: JSON.stringify(payload),
+      }),
     eventsUrl: () => withToken("/api/v1/events").toString(),
   };
 }

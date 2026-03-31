@@ -11,14 +11,14 @@
       >
         <span class="flex items-center gap-1.5 text-[0.82rem] leading-none">
           <n-icon size="16"><GlobeIcon /></n-icon>
-          <span>Web端</span>
+          <span class="mt-0.5">Web端</span>
         </span>
       </n-button>
 
       <n-button quaternary class="!h-7 !rounded-[6px] !px-2 text-[var(--text-main)]">
         <span class="flex items-center gap-1.5 text-[0.82rem] leading-none">
           <n-icon size="16"><HelpIcon /></n-icon>
-          <span>帮助</span>
+          <span class="mt-0.5">帮助</span>
         </span>
       </n-button>
     </nav>

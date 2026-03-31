@@ -5,6 +5,8 @@ import tailwindcss from "@tailwindcss/vite";
 export default defineConfig({
   plugins: [vue(), tailwindcss()],
   build: {
+    minify: false,
+    cssMinify: false,
     sourcemap: true,
   },
 });
