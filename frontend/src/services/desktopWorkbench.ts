@@ -6,6 +6,7 @@ import type {
   ClipboardItemRecord,
   ClipboardListQuery,
   ConnectivityReport,
+  DesktopSettings,
   OnlineDevice,
   SyncClipboardResponse,
 } from "../types/workbench";
@@ -47,8 +48,21 @@ export const desktopWorkbench = {
   openURL(url: string) {
     return Promise.resolve(desktopApp!.OpenURL(url));
   },
+  hideDesktopApp() {
+    return desktopApp!.HideDesktopApp() as Promise<void>;
+  },
+  getDesktopSettings() {
+    return desktopApp!.GetDesktopSettings() as Promise<DesktopSettings>;
+  },
+  updateDesktopSettings(input: DesktopSettings) {
+    return desktopApp!.UpdateDesktopSettings(input) as Promise<DesktopSettings>;
+  },
   subscribeClipboardRefresh(handler: () => void) {
     const off = EventsOn("localshare://clipboard/refresh", handler);
+    return () => off();
+  },
+  subscribeSessionRefresh(handler: () => void) {
+    const off = EventsOn("localshare://session/refresh", handler);
     return () => off();
   },
 };

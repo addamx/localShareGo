@@ -1,5 +1,7 @@
 package auth
 
+const EventName = "localshare://session/refresh"
+
 type AuthStatus struct {
 	TokenTTLMinutes  int    `json:"tokenTtlMinutes"`
 	RotationEnabled  bool   `json:"rotationEnabled"`

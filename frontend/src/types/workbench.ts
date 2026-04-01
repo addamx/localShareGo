@@ -103,6 +103,10 @@ export interface SyncClipboardResponse {
   deliveredDevices: OnlineDevice[];
 }
 
+export interface DesktopSettings {
+  showAppHotkey: string;
+}
+
 export interface ClipboardRefreshEvent {
   itemId: string;
 }

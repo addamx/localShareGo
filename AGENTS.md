@@ -56,3 +56,8 @@
 # FRONTEND
 - 样式优先使用 Tailwind，其次 SCSS
 - 浏览器storage使用localForage
+- 优先flex，必要时grid
+
+# UI
+- 紧凑、简洁
+- 操作优先用icon替代文字

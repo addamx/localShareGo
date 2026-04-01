@@ -1,6 +1,7 @@
-import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { computed, h, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { useRouter } from "vue-router";
 import { useDebounceFn } from "@vueuse/core";
-import { useMessage, type DropdownOption } from "naive-ui";
+import { NIcon, useMessage, type DropdownMixedOption, type DropdownOption } from "naive-ui";
 
 import { copyText } from "../app/env";
 import { describeError, uniqueStrings } from "../app/formatters";
@@ -11,10 +12,12 @@ import type {
   ConnectivityReport,
   OnlineDevice,
 } from "../types/workbench";
+import { GlobeIcon, SettingsIcon } from "../utils/desktopIcons";
 
 const preferredHostStorageKey = "localsharego:web-entry-host";
 
 export function useDesktopWorkbench() {
+  const router = useRouter();
   const message = useMessage();
   const available = desktopWorkbench.isAvailable();
 
@@ -26,7 +29,6 @@ export function useDesktopWorkbench() {
   const refreshing = ref(false);
   const search = ref("");
   const pinnedOnly = ref(false);
-  const menuBarVisible = ref(false);
   const webPanelOpen = ref(false);
   const detailPanelOpen = ref(false);
   const diagnosticsModalOpen = ref(false);
@@ -86,11 +88,13 @@ export function useDesktopWorkbench() {
   );
   const candidateOptions = computed<DropdownOption[]>(() =>
     candidateHosts.value.map((host) => ({
-      label: host === activeHost.value ? `${host} · current` : host,
+      label: host === activeHost.value ? `${host} current` : host,
       key: host,
     })),
   );
-  const moreOptions = computed<DropdownOption[]>(() => [
+  const moreOptions = computed<DropdownMixedOption[]>(() => [
+    { label: "Web端", key: "web", renderIcon: renderOptionIcon(GlobeIcon) },
+    { label: "设置", key: "settings", renderIcon: renderOptionIcon(SettingsIcon) },
     { label: "刷新", key: "refresh" },
     { label: "清空", key: "clear" },
     { label: pinnedOnly.value ? "查看全部" : "仅看置顶", key: "togglePinned" },
@@ -103,9 +107,9 @@ export function useDesktopWorkbench() {
 
     const syncChildren: DropdownOption[] =
       onlineDevices.value.length === 0
-        ? [{ label: "暂无在线设备", key: "sync:none", disabled: true }]
+        ? [{ label: "No online devices", key: "sync:none", disabled: true }]
         : [
-            { label: "同步到全部", key: "sync:all" },
+            { label: "Sync to all", key: "sync:all" },
             ...onlineDevices.value.map((device) => ({
               label: device.name,
               key: `sync:${device.id}`,
@@ -113,10 +117,10 @@ export function useDesktopWorkbench() {
           ];
 
     return [
-      { label: item.pinned ? "取消置顶" : "置顶", key: "pin" },
-      { label: "同步", key: "sync", children: syncChildren },
-      { label: "查看", key: "view" },
-      { label: "删除", key: "delete" },
+      { label: item.pinned ? "Unpin" : "Pin", key: "pin" },
+      { label: "Sync", key: "sync", children: syncChildren },
+      { label: "View", key: "view" },
+      { label: "Delete", key: "delete" },
     ];
   });
 
@@ -131,12 +135,11 @@ export function useDesktopWorkbench() {
   });
 
   let cleanup: (() => void) | null = null;
+  let cleanupSession: (() => void) | null = null;
   let clockTimer: number | null = null;
-  let altToggleArmed = false;
 
   onMounted(async () => {
     window.addEventListener("keydown", handleWindowKeyDown);
-    window.addEventListener("keyup", handleWindowKeyUp);
     window.addEventListener("blur", handleWindowBlur);
 
     if (!available) {
@@ -146,6 +149,9 @@ export function useDesktopWorkbench() {
 
     cleanup = desktopWorkbench.subscribeClipboardRefresh(() => {
       void refreshHistory(true);
+    });
+    cleanupSession = desktopWorkbench.subscribeSessionRefresh(() => {
+      void loadBootstrap();
     });
     clockTimer = window.setInterval(() => {
       clock.value = Date.now();
@@ -161,11 +167,11 @@ export function useDesktopWorkbench() {
 
   onBeforeUnmount(() => {
     cleanup?.();
+    cleanupSession?.();
     if (clockTimer !== null) {
       window.clearInterval(clockTimer);
     }
     window.removeEventListener("keydown", handleWindowKeyDown);
-    window.removeEventListener("keyup", handleWindowKeyUp);
     window.removeEventListener("blur", handleWindowBlur);
   });
 
@@ -206,7 +212,7 @@ export function useDesktopWorkbench() {
       }
 
       if (!silent) {
-        message.success("剪贴板已刷新");
+        message.success("Clipboard refreshed");
       }
     } catch (error) {
       message.error(describeError(error));
@@ -233,45 +239,32 @@ export function useDesktopWorkbench() {
   }
 
   async function openWebPanel() {
-    hideMenuBar();
     await loadBootstrap();
     webPanelOpen.value = true;
   }
 
-  function hideMenuBar() {
-    menuBarVisible.value = false;
-    altToggleArmed = false;
+  async function hideDesktopApp() {
+    if (!available) {
+      return;
+    }
+
+    try {
+      await desktopWorkbench.hideDesktopApp();
+    } catch (error) {
+      message.error(describeError(error));
+    }
   }
 
   function handleWindowKeyDown(event: KeyboardEvent) {
-    if (event.key === "Alt") {
-      if (!event.repeat) {
-        altToggleArmed = true;
-      }
-      return;
-    }
-
-    altToggleArmed = false;
-
     if (event.key === "Escape") {
-      hideMenuBar();
+      closeContextMenu();
+      void hideDesktopApp();
     }
-  }
-
-  function handleWindowKeyUp(event: KeyboardEvent) {
-    if (event.key !== "Alt") {
-      return;
-    }
-
-    if (altToggleArmed) {
-      menuBarVisible.value = !menuBarVisible.value;
-    }
-
-    altToggleArmed = false;
   }
 
   function handleWindowBlur() {
-    hideMenuBar();
+    closeContextMenu();
+    void hideDesktopApp();
   }
 
   function openContextMenu(event: MouseEvent, item: ClipboardItemRecord) {
@@ -326,9 +319,10 @@ export function useDesktopWorkbench() {
     try {
       await desktopWorkbench.activateClipboardItem(itemId);
       if (notify) {
-        message.success("已写回系统剪贴板");
+        message.success("Copied to system clipboard");
       }
       await refreshHistory(true);
+      await hideDesktopApp();
     } catch (error) {
       message.error(describeError(error));
     }
@@ -337,7 +331,7 @@ export function useDesktopWorkbench() {
   async function handlePin(item: ClipboardItemRecord) {
     try {
       await desktopWorkbench.updateClipboardItemPin(item.id, !item.pinned);
-      message.success(item.pinned ? "已取消置顶" : "已置顶");
+      message.success(item.pinned ? "Unpinned" : "Pinned");
       await refreshHistory(true);
     } catch (error) {
       message.error(describeError(error));
@@ -345,7 +339,7 @@ export function useDesktopWorkbench() {
   }
 
   async function handleDelete(item: ClipboardItemRecord) {
-    if (!window.confirm(`确认删除这条记录？\n\n${item.preview || item.content}`)) {
+    if (!window.confirm(`Delete this record?\n\n${item.preview || item.content}`)) {
       return;
     }
 
@@ -355,7 +349,7 @@ export function useDesktopWorkbench() {
         detailItemId.value = null;
         detailPanelOpen.value = false;
       }
-      message.success("记录已删除");
+      message.success("Record deleted");
       await refreshHistory(true);
     } catch (error) {
       message.error(describeError(error));
@@ -366,10 +360,10 @@ export function useDesktopWorkbench() {
     try {
       const result = await desktopWorkbench.syncClipboardItem(item.id, targetDeviceIds, syncAll);
       if (result.deliveredDevices.length === 0) {
-        message.warning("没有可同步的目标设备");
+        message.warning("No available target devices");
         return;
       }
-      message.success(`已同步到 ${result.deliveredDevices.length} 个设备`);
+      message.success(`Synced to ${result.deliveredDevices.length} devices`);
       await refreshOnlineDevices();
     } catch (error) {
       message.error(describeError(error));
@@ -388,7 +382,7 @@ export function useDesktopWorkbench() {
       return;
     }
     await copyText(detailItem.value.content);
-    message.success("内容已复制");
+    message.success("Content copied");
   }
 
   async function handleCopyEntry() {
@@ -396,7 +390,7 @@ export function useDesktopWorkbench() {
       return;
     }
     await copyText(resolvedSessionUrl.value);
-    message.success("链接已复制");
+    message.success("Link copied");
   }
 
   async function handleOpenEntry() {
@@ -417,11 +411,11 @@ export function useDesktopWorkbench() {
     window.localStorage.setItem(preferredHostStorageKey, host);
   }
 
-  async function handleRotateSession() {
+  async function handleRefreshSession() {
     try {
       await desktopWorkbench.rotateSessionToken();
       await loadBootstrap();
-      message.success("会话令牌已轮换");
+      message.success("Session token rotated");
     } catch (error) {
       message.error(describeError(error));
     }
@@ -444,6 +438,14 @@ export function useDesktopWorkbench() {
   }
 
   async function handleMoreSelect(key: string | number) {
+    if (key === "web") {
+      await openWebPanel();
+      return;
+    }
+    if (key === "settings") {
+      await router.push("/desktop/settings");
+      return;
+    }
     if (key === "refresh") {
       await refreshHistory(false);
       return;
@@ -459,7 +461,7 @@ export function useDesktopWorkbench() {
   }
 
   async function handleClearHistory() {
-    if (!window.confirm("确认清空全部剪贴板历史？")) {
+    if (!window.confirm("Clear all clipboard history?")) {
       return;
     }
 
@@ -467,7 +469,7 @@ export function useDesktopWorkbench() {
       await desktopWorkbench.clearClipboardHistory();
       detailItemId.value = null;
       detailPanelOpen.value = false;
-      message.success("历史已清空");
+      message.success("History cleared");
       await refreshHistory(true);
     } catch (error) {
       message.error(describeError(error));
@@ -510,16 +512,13 @@ export function useDesktopWorkbench() {
     handleDeleteDetail,
     handleMoreSelect,
     handleOpenEntry,
-    handleRotateSession,
+    handleRefreshSession,
     handleRowClick,
-    hideMenuBar,
     items,
     loading,
-    menuBarVisible,
     moreOptions,
     openContextMenu,
     openDiagnostics,
-    openWebPanel,
     refreshing,
     resolvedSessionUrl,
     search,
@@ -536,16 +535,27 @@ function resolveCandidateHosts(appBootstrap: AppBootstrap) {
 
 function formatTokenCountdown(expiresAt: number | null, now: number) {
   if (!expiresAt) {
-    return "待访问";
+    return "Pending";
   }
 
   const remaining = expiresAt - now;
   if (remaining <= 0) {
-    return "已过期";
+    return "Expired";
   }
   if (remaining > 60_000) {
     return `${Math.max(1, Math.floor(remaining / 60_000))}m`;
   }
 
   return `${Math.floor(remaining / 1000)}s`;
+}
+
+function renderOptionIcon(icon: Parameters<typeof h>[0]) {
+  return () =>
+    h(
+      NIcon,
+      null,
+      {
+        default: () => h(icon),
+      },
+    );
 }

@@ -61,10 +61,10 @@ func (a *Service) RotateSession(now int64) (store.SessionRecord, string, error) 
 	return a.issuePendingSessionLocked(now)
 }
 
-func (a *Service) ValidateToken(token string, now int64) (store.SessionRecord, error) {
+func (a *Service) ValidateToken(token string, now int64) (store.SessionRecord, bool, error) {
 	trimmed := strings.TrimSpace(token)
 	if trimmed == "" {
-		return store.SessionRecord{}, apierr.Unauthorized("missing bearer token")
+		return store.SessionRecord{}, false, apierr.Unauthorized("missing bearer token")
 	}
 
 	a.mu.Lock()
@@ -72,13 +72,13 @@ func (a *Service) ValidateToken(token string, now int64) (store.SessionRecord, e
 
 	session, err := a.store.GetSessionByHash(hashText(trimmed), now)
 	if err != nil {
-		return store.SessionRecord{}, err
+		return store.SessionRecord{}, false, err
 	}
 	if session == nil {
-		return store.SessionRecord{}, apierr.Unauthorized("invalid or expired token")
+		return store.SessionRecord{}, false, apierr.Unauthorized("invalid or expired token")
 	}
 	if session.Status != "pending" {
-		return *session, nil
+		return *session, false, nil
 	}
 
 	activated, err := a.store.ActivateSession(
@@ -87,16 +87,16 @@ func (a *Service) ValidateToken(token string, now int64) (store.SessionRecord, e
 		now,
 	)
 	if err != nil {
-		return store.SessionRecord{}, err
+		return store.SessionRecord{}, false, err
 	}
 
 	if a.currentSessionID == activated.ID {
 		if _, _, err := a.issuePendingSessionLocked(now); err != nil {
-			return store.SessionRecord{}, err
+			return store.SessionRecord{}, false, err
 		}
 	}
 
-	return activated, nil
+	return activated, true, nil
 }
 
 func (a *Service) CurrentToken() string {

@@ -65,9 +65,22 @@ func New(ctx context.Context, assets embed.FS) (*AppRuntime, error) {
 		wruntime.EventsEmit(ctx, clipboard.EventName, event)
 	})
 
-	server, err := httpserver.New(appConfig, dataStore, authService, clipboardService, networkService, assets, presenceRegistry, onlineDevice.ID, func(event clipboard.RefreshEvent) {
-		wruntime.EventsEmit(ctx, clipboard.EventName, event)
-	})
+	server, err := httpserver.New(
+		appConfig,
+		dataStore,
+		authService,
+		clipboardService,
+		networkService,
+		assets,
+		presenceRegistry,
+		onlineDevice.ID,
+		func(event clipboard.RefreshEvent) {
+			wruntime.EventsEmit(ctx, clipboard.EventName, event)
+		},
+		func() {
+			wruntime.EventsEmit(ctx, auth.EventName)
+		},
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -190,6 +203,10 @@ func (r *AppRuntime) HTTP() *httpserver.HTTPServer {
 
 func (r *AppRuntime) OnlineDeviceID() string {
 	return r.onlineID
+}
+
+func (r *AppRuntime) Paths() config.AppPaths {
+	return r.paths
 }
 
 func probeHost(host string, port int) ConnectivityCheck {

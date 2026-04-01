@@ -83,6 +83,7 @@ type HTTPServer struct {
 	desktopDeviceID    string
 	broker             *EventBroker
 	onClipboardRefresh func(clipboard.RefreshEvent)
+	onSessionRefresh   func()
 	mu                 sync.RWMutex
 	effectivePort      *int
 	state              string
@@ -90,7 +91,7 @@ type HTTPServer struct {
 	server             *http.Server
 }
 
-func New(appConfig config.RuntimeConfig, dataStore *store.Store, authService *auth.Service, clipboardService *clipboard.Service, networkService *network.Service, assets embed.FS, presenceRegistry *presence.Registry, desktopDeviceID string, onClipboardRefresh func(clipboard.RefreshEvent)) (*HTTPServer, error) {
+func New(appConfig config.RuntimeConfig, dataStore *store.Store, authService *auth.Service, clipboardService *clipboard.Service, networkService *network.Service, assets embed.FS, presenceRegistry *presence.Registry, desktopDeviceID string, onClipboardRefresh func(clipboard.RefreshEvent), onSessionRefresh func()) (*HTTPServer, error) {
 	assetFS, err := fs.Sub(assets, "frontend/dist")
 	if err != nil {
 		return nil, err
@@ -118,6 +119,7 @@ func New(appConfig config.RuntimeConfig, dataStore *store.Store, authService *au
 		desktopDeviceID:    desktopDeviceID,
 		broker:             newEventBroker(),
 		onClipboardRefresh: onClipboardRefresh,
+		onSessionRefresh:   onSessionRefresh,
 		state:              "stopped",
 	}, nil
 }
@@ -349,10 +351,16 @@ func (s *HTTPServer) handleSession(writer http.ResponseWriter, request *http.Req
 	}
 
 	token := extractToken(request)
-	session, err := s.auth.ValidateToken(token, nowMs())
+	session, activated, err := s.auth.ValidateToken(token, nowMs())
 	if err != nil {
 		writeAPIError(writer, err)
 		return
+	}
+	if activated {
+		s.PublishRefresh("session", nil)
+		if s.onSessionRefresh != nil {
+			s.onSessionRefresh()
+		}
 	}
 
 	writeAPIResponse(writer, http.StatusOK, s.buildSessionResponse(session))
@@ -376,6 +384,9 @@ func (s *HTTPServer) handleRotateToken(writer http.ResponseWriter, request *http
 	}
 
 	s.PublishRefresh("session", nil)
+	if s.onSessionRefresh != nil {
+		s.onSessionRefresh()
+	}
 	writeAPIResponse(writer, http.StatusOK, s.buildSessionResponse(session))
 }
 
@@ -806,7 +817,8 @@ func (s *HTTPServer) SyncClipboardContent(content, sourceDeviceID string, target
 }
 
 func (s *HTTPServer) authorizeRequest(request *http.Request) (store.SessionRecord, error) {
-	return s.auth.ValidateToken(extractToken(request), nowMs())
+	session, _, err := s.auth.ValidateToken(extractToken(request), nowMs())
+	return session, err
 }
 
 func (s *HTTPServer) listOnlineDevices(excludeIDs ...string) []OnlineDevice {

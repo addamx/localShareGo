@@ -10,18 +10,22 @@ import (
 	"localShareGo/internal/apierr"
 	"localShareGo/internal/auth"
 	"localShareGo/internal/clipboard"
+	"localShareGo/internal/desktopshell"
 	"localShareGo/internal/httpserver"
 	"localShareGo/internal/runtimeapp"
+	"localShareGo/internal/settings"
 	"localShareGo/internal/store"
 )
 
 type App struct {
-	ctx     context.Context
-	runtime *runtimeapp.AppRuntime
+	ctx      context.Context
+	runtime  *runtimeapp.AppRuntime
+	shell    *desktopshell.Manager
+	trayIcon []byte
 }
 
-func NewApp() *App {
-	return &App{}
+func NewApp(trayIcon []byte) *App {
+	return &App{trayIcon: trayIcon}
 }
 
 func (a *App) startup(ctx context.Context) {
@@ -36,9 +40,21 @@ func (a *App) startup(ctx context.Context) {
 	}
 
 	a.runtime = runtime
+
+	shell, err := desktopshell.New(runtime.Paths(), a.trayIcon)
+	if err != nil {
+		panic(err)
+	}
+	if err := shell.Start(ctx); err != nil {
+		panic(err)
+	}
+	a.shell = shell
 }
 
 func (a *App) shutdown(context.Context) {
+	if a.shell != nil {
+		a.shell.Stop()
+	}
 	if a.runtime != nil {
 		a.runtime.Stop()
 	}
@@ -164,11 +180,34 @@ func (a *App) OpenURL(url string) {
 	}
 }
 
+func (a *App) HideDesktopApp() error {
+	return a.mustShell().Hide()
+}
+
+func (a *App) ShowDesktopApp() error {
+	return a.mustShell().Show()
+}
+
+func (a *App) GetDesktopSettings() (settings.DesktopSettings, error) {
+	return a.mustShell().Settings()
+}
+
+func (a *App) UpdateDesktopSettings(input settings.DesktopSettings) (settings.DesktopSettings, error) {
+	return a.mustShell().UpdateSettings(input)
+}
+
 func (a *App) mustRuntime() *runtimeapp.AppRuntime {
 	if a.runtime == nil {
 		panic("application runtime is not ready")
 	}
 	return a.runtime
+}
+
+func (a *App) mustShell() *desktopshell.Manager {
+	if a.shell == nil {
+		panic("desktop shell is not ready")
+	}
+	return a.shell
 }
 
 func (a *App) emitClipboardEvent(event clipboard.RefreshEvent) {

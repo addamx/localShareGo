@@ -18,6 +18,11 @@ export function createWorkbenchRouter() {
         component: () => import("../pages/DesktopPage.vue"),
       },
       {
+        path: "/desktop/settings",
+        name: "desktop-settings",
+        component: () => import("../pages/DesktopSettingsPage.vue"),
+      },
+      {
         path: "/web",
         name: "web",
         component: WebPage,

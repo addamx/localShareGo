@@ -1,28 +1,21 @@
 <template>
-  <div
-    class="grid min-h-screen p-2.5 md:p-3"
-    :class="menuBarVisible ? 'grid-rows-[auto,minmax(0,1fr)] gap-3' : 'grid-rows-[minmax(0,1fr)] gap-0'"
-    @click="handleSurfaceClick"
-  >
-    <DesktopMenuBar
-      v-if="menuBarVisible"
-      :available="available"
-      @open-web="openWebPanel"
-    />
+  <div class="flex h-screen flex-col overflow-hidden p-2.5 md:p-3" @click="handleSurfaceClick">
+    <div class="h-2 shrink-0 [--wails-draggable:drag]" />
 
     <section
       v-if="!available"
-      class="grid min-h-0 place-items-center rounded-[12px] border border-[rgba(20,33,27,0.12)] bg-[rgba(250,248,242,0.88)] shadow-[0_16px_48px_rgba(40,34,19,0.08)] backdrop-blur-[14px]"
+      class="grid min-h-0 flex-1 place-items-center rounded-[12px] border border-[rgba(20,33,27,0.12)] bg-[rgba(250,248,242,0.88)] shadow-[0_16px_48px_rgba(40,34,19,0.08)] backdrop-blur-[14px]"
     >
       <div class="grid gap-1 text-center">
-        <span class="text-[0.92rem] font-bold text-[var(--text-main)]">NaiveDesktop API 不可用</span>
-        <small class="text-[var(--text-muted)]">当前环境没有 Wails 绑定。</small>
+        <span class="text-[0.92rem] font-bold text-[var(--text-main)]">Desktop API unavailable</span>
+        <small class="text-[var(--text-muted)]">This environment does not have Wails bindings.</small>
       </div>
     </section>
 
     <DesktopClipboardList
-      ref="clipboardListRef"
       v-else
+      ref="clipboardListRef"
+      class="min-h-0 flex-1"
       :items="items"
       :loading="loading"
       :more-options="moreOptions"
@@ -45,7 +38,7 @@
       @copy="handleCopyEntry"
       @diagnostics="openDiagnostics"
       @open="handleOpenEntry"
-      @rotate="handleRotateSession"
+      @refresh="handleRefreshSession"
       @select-host="handleCandidateSelect"
     />
 
@@ -79,14 +72,14 @@
 </template>
 
 <script setup lang="ts">
-import { nextTick, ref } from "vue";
+import { ref } from "vue";
 import { NDropdown } from "naive-ui";
 
 import DesktopClipboardList from "../components/desktop/DesktopClipboardList.vue";
 import DesktopDetailDrawer from "../components/desktop/DesktopDetailDrawer.vue";
 import DesktopDiagnosticsModal from "../components/desktop/DesktopDiagnosticsModal.vue";
-import DesktopMenuBar from "../components/desktop/DesktopMenuBar.vue";
 import DesktopWebDrawer from "../components/desktop/DesktopWebDrawer.vue";
+import { useRestorableScrollPosition } from "../hooks/useRestorableScrollPosition";
 import { useDesktopWorkbench } from "../hooks/useDesktopWorkbench";
 
 const {
@@ -112,16 +105,13 @@ const {
   handleDeleteDetail,
   handleMoreSelect,
   handleOpenEntry,
-  handleRotateSession,
+  handleRefreshSession,
   handleRowClick,
-  hideMenuBar,
   items,
   loading,
-  menuBarVisible,
   moreOptions,
   openContextMenu,
   openDiagnostics,
-  openWebPanel,
   refreshing,
   resolvedSessionUrl,
   search,
@@ -130,20 +120,20 @@ const {
   webPanelOpen,
 } = useDesktopWorkbench();
 
-const clipboardListRef = ref<InstanceType<typeof DesktopClipboardList> | null>(null);
+type DesktopClipboardListExpose = {
+  getScroller: () => HTMLElement | null;
+};
+
+const clipboardListRef = ref<DesktopClipboardListExpose | null>(null);
+const { recordPosition, restorePosition } = useRestorableScrollPosition(() => clipboardListRef.value?.getScroller());
 
 async function handleClipboardRowClick(item: (typeof items.value)[number]) {
-  const scrollTop = clipboardListRef.value?.getScrollTop() ?? 0;
+  recordPosition();
   await handleRowClick(item);
-  await nextTick();
-  clipboardListRef.value?.setScrollTop(scrollTop);
-  window.requestAnimationFrame(() => {
-    clipboardListRef.value?.setScrollTop(scrollTop);
-  });
+  restorePosition();
 }
 
 function handleSurfaceClick() {
   closeContextMenu();
-  hideMenuBar();
 }
 </script>

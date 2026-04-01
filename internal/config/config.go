@@ -26,10 +26,11 @@ type RuntimeConfig struct {
 }
 
 type AppPaths struct {
-	AppDir       string `json:"appDir"`
-	DataDir      string `json:"dataDir"`
-	DatabasePath string `json:"databasePath"`
-	LogsDir      string `json:"logsDir"`
+	AppDir              string `json:"appDir"`
+	DataDir             string `json:"dataDir"`
+	DatabasePath        string `json:"databasePath"`
+	DesktopSettingsPath string `json:"desktopSettingsPath"`
+	LogsDir             string `json:"logsDir"`
 }
 
 func DefaultRuntimeConfig() RuntimeConfig {
@@ -55,10 +56,11 @@ func ResolveAppPaths(config RuntimeConfig) AppPaths {
 	logsDir := filepath.Join(appDir, "logs")
 
 	return AppPaths{
-		AppDir:       appDir,
-		DataDir:      dataDir,
-		DatabasePath: filepath.Join(dataDir, config.DatabaseFileName),
-		LogsDir:      logsDir,
+		AppDir:              appDir,
+		DataDir:             dataDir,
+		DatabasePath:        filepath.Join(dataDir, config.DatabaseFileName),
+		DesktopSettingsPath: filepath.Join(dataDir, "desktop-settings.json"),
+		LogsDir:             logsDir,
 	}
 }
 

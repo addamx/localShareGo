@@ -7,7 +7,7 @@ import AppShell from "./AppShell.vue";
 export async function bootstrapApp() {
   const router = createWorkbenchRouter();
 
-  if (isDesktopRuntime && router.currentRoute.value.path !== "/desktop") {
+  if (isDesktopRuntime && !router.currentRoute.value.path.startsWith("/desktop")) {
     await router.replace("/desktop");
   }
 

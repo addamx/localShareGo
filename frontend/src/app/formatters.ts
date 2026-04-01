@@ -24,8 +24,8 @@ export function formatDateTime(value: number | null | undefined) {
 }
 
 export function formatSource(value: string) {
-  if (value === "desktop_local") return "NaiveDesktop 本机";
-  if (value === "mobile_web") return "Web 浏览器";
+  if (value === "desktop_local") return "本机";
+  if (value === "mobile_web") return "Web";
   return value;
 }
 

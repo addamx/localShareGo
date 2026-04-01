@@ -1,4 +1,5 @@
 export {
+  ArrowLeft as BackIcon,
   Activity as DiagnosticsIcon,
   Copy as CopyIcon,
   Ellipsis as MoreIcon,
@@ -6,9 +7,11 @@ export {
   ExternalLink as OpenIcon,
   Globe as GlobeIcon,
   HelpCircle as HelpIcon,
+  Keyboard as KeyboardIcon,
   RotateCw as RotateIcon,
   Route as RouteIcon,
   Search as SearchIcon,
+  Settings as SettingsIcon,
   Share2 as ShareLogoIcon,
   Trash2 as DeleteIcon,
   X as CloseIcon,
