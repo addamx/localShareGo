@@ -14,6 +14,8 @@ type platformManager interface {
 	Stop()
 	Show() error
 	Hide() error
+	IsPinned() bool
+	SetPinned(pinned bool) bool
 	Settings() (settings.DesktopSettings, error)
 	UpdateSettings(next settings.DesktopSettings) (settings.DesktopSettings, error)
 }
@@ -44,6 +46,14 @@ func (m *Manager) Show() error {
 
 func (m *Manager) Hide() error {
 	return m.impl.Hide()
+}
+
+func (m *Manager) IsPinned() bool {
+	return m.impl.IsPinned()
+}
+
+func (m *Manager) SetPinned(pinned bool) bool {
+	return m.impl.SetPinned(pinned)
 }
 
 func (m *Manager) Settings() (settings.DesktopSettings, error) {

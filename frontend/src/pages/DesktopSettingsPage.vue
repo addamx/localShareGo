@@ -22,7 +22,7 @@
 
       <div class="min-h-0 flex-1 overflow-auto p-3">
         <n-tabs type="line" animated>
-          <n-tab-pane :name="'shortcut'" tab="快捷键">
+          <n-tab-pane name="shortcut" tab="快捷键">
             <section class="grid max-w-[38rem] gap-3">
               <div class="rounded-[12px] border border-[rgba(20,33,27,0.08)] bg-white/55 p-4">
                 <div class="mb-3 flex items-start gap-3">
@@ -45,7 +45,6 @@
                   type="button"
                   class="flex min-h-[3rem] w-full items-center justify-between rounded-[12px] border border-[rgba(20,33,27,0.1)] bg-[rgba(255,252,247,0.92)] px-3 py-2 text-left text-[0.92rem] text-[var(--text-main)] transition-colors duration-150 hover:border-[rgba(31,122,90,0.28)] focus:outline-none focus:ring-2 focus:ring-[rgba(31,122,90,0.18)]"
                   @click="startCapture"
-                  @keydown.prevent.stop="handleCaptureKeydown"
                 >
                   <span>{{ captureDisplay }}</span>
                   <small class="text-[0.76rem] text-[var(--text-muted)]">
@@ -82,18 +81,19 @@ const message = useMessage();
 
 const captureButtonRef = ref<HTMLButtonElement | null>(null);
 const capturing = ref(false);
+const capturePreview = ref("");
 const draftHotkey = ref("");
 const saving = ref(false);
 
 const captureDisplay = computed(() => {
   if (capturing.value) {
-    return "按下快捷键...";
+    return capturePreview.value || "按下快捷键...";
   }
   return draftHotkey.value || "未设置";
 });
 
 onMounted(async () => {
-  window.addEventListener("keydown", handleWindowKeyDown);
+  window.addEventListener("keydown", handleWindowKeyDown, true);
   window.addEventListener("blur", handleWindowBlur);
 
   try {
@@ -105,12 +105,13 @@ onMounted(async () => {
 });
 
 onBeforeUnmount(() => {
-  window.removeEventListener("keydown", handleWindowKeyDown);
+  window.removeEventListener("keydown", handleWindowKeyDown, true);
   window.removeEventListener("blur", handleWindowBlur);
 });
 
 function startCapture() {
   capturing.value = true;
+  capturePreview.value = "";
   void nextTick(() => {
     captureButtonRef.value?.focus();
   });
@@ -118,12 +119,27 @@ function startCapture() {
 
 function clearHotkey() {
   capturing.value = false;
+  capturePreview.value = "";
   draftHotkey.value = "";
 }
 
-function handleCaptureKeydown(event: KeyboardEvent) {
+function handleWindowKeyDown(event: KeyboardEvent) {
+  if (capturing.value) {
+    event.preventDefault();
+    event.stopPropagation();
+    applyCapturedHotkey(event);
+    return;
+  }
+
+  if (event.key === "Escape") {
+    void desktopWorkbench.hideDesktopApp();
+  }
+}
+
+function applyCapturedHotkey(event: KeyboardEvent) {
   if (event.key === "Escape" && !event.ctrlKey && !event.altKey && !event.shiftKey && !event.metaKey) {
     capturing.value = false;
+    capturePreview.value = "";
     return;
   }
 
@@ -138,6 +154,8 @@ function handleCaptureKeydown(event: KeyboardEvent) {
     return;
   }
 
+  capturePreview.value = formatHotkeyFromKeyboardEvent(event, true);
+
   const nextHotkey = formatHotkeyFromKeyboardEvent(event);
   if (!nextHotkey) {
     return;
@@ -145,19 +163,11 @@ function handleCaptureKeydown(event: KeyboardEvent) {
 
   draftHotkey.value = nextHotkey;
   capturing.value = false;
-}
-
-function handleWindowKeyDown(event: KeyboardEvent) {
-  if (capturing.value) {
-    return;
-  }
-
-  if (event.key === "Escape") {
-    void desktopWorkbench.hideDesktopApp();
-  }
+  capturePreview.value = "";
 }
 
 function handleWindowBlur() {
+  capturePreview.value = "";
   void desktopWorkbench.hideDesktopApp();
 }
 
@@ -170,6 +180,7 @@ async function saveSettings() {
     });
     draftHotkey.value = saved.showAppHotkey;
     capturing.value = false;
+    capturePreview.value = "";
     message.success("设置已保存");
   } catch (error) {
     message.error(describeError(error));

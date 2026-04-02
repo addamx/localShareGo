@@ -52,6 +52,9 @@
 # PITFALLS
 - Web 开发态下 `/web` 走 Vite 代理，生产环境继续走 `frontend/dist`
 - Web 路由不要静态引入桌面页、`desktopWorkbench` 或 `wailsjs` 依赖；桌面页默认用路由懒加载，避免 Web 端请求 `/wailsjs/*`
+- 快捷键录入不要只依赖输入框自身事件；`Alt` 这类修饰键要用窗口级 `keydown` 捕获，并支持“仅修饰键预览、非最终值保存”，否则设置页会表现成按下无反应
+- 快捷键前端录入映射和 Windows 注册映射必须同步维护；新增按键时要同时检查 `frontend/src/utils/hotkeys.ts` 与 `internal/desktopshell/hotkey_windows.go`，例如 `` ` `` / `Backquote` / `VK_OEM_3`
+- Windows 热键注册必须保证“修饰键 + 1 个主键”的约束；单独 `Alt`、`Ctrl`、`Shift` 只能预览，不能保存成最终热键
 
 # FRONTEND
 - 样式优先使用 Tailwind，其次 SCSS

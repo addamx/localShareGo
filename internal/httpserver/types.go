@@ -69,6 +69,7 @@ type DevicePresenceResponse struct {
 }
 
 type SyncClipboardRequest struct {
+	ItemID          *string  `json:"itemId"`
 	Content         string   `json:"content"`
 	SourceDeviceID  string   `json:"sourceDeviceId"`
 	TargetDeviceIDs []string `json:"targetDeviceIds"`
@@ -81,18 +82,27 @@ type SyncClipboardResponse struct {
 }
 
 type SyncClipboardEvent struct {
-	TargetDeviceIDs []string `json:"targetDeviceIds"`
-	Content         string   `json:"content"`
-	SourceKind      string   `json:"sourceKind"`
-	CreatedAt       int64    `json:"createdAt"`
+	TargetDeviceIDs []string                  `json:"targetDeviceIds"`
+	Item            store.ClipboardItemRecord `json:"item"`
+	CreatedAt       int64                     `json:"createdAt"`
+}
+
+type FileTransferEvent struct {
+	ItemID           string  `json:"itemId"`
+	Status           string  `json:"status"`
+	ProgressPercent  int     `json:"progressPercent"`
+	BytesTransferred int64   `json:"bytesTransferred"`
+	BytesTotal       int64   `json:"bytesTotal"`
+	ErrorMessage     *string `json:"errorMessage"`
 }
 
 type ServerEvent struct {
-	Kind   string              `json:"kind"`
-	Scope  string              `json:"scope"`
-	ItemID *string             `json:"itemId"`
-	Sync   *SyncClipboardEvent `json:"sync"`
-	TS     int64               `json:"ts"`
+	Kind         string              `json:"kind"`
+	Scope        string              `json:"scope"`
+	ItemID       *string             `json:"itemId"`
+	Sync         *SyncClipboardEvent `json:"sync"`
+	FileTransfer *FileTransferEvent  `json:"fileTransfer"`
+	TS           int64               `json:"ts"`
 }
 
 type APIEnvelope[T any] struct {

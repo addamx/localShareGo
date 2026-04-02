@@ -21,6 +21,7 @@ import (
 	"localShareGo/internal/auth"
 	"localShareGo/internal/clipboard"
 	"localShareGo/internal/config"
+	"localShareGo/internal/filetransfer"
 	"localShareGo/internal/network"
 	"localShareGo/internal/presence"
 	"localShareGo/internal/store"
@@ -73,6 +74,7 @@ func (b *EventBroker) publish(event ServerEvent) {
 
 type HTTPServer struct {
 	config             config.RuntimeConfig
+	paths              config.AppPaths
 	store              *store.Store
 	auth               *auth.Service
 	clipboard          *clipboard.Service
@@ -82,7 +84,9 @@ type HTTPServer struct {
 	presence           *presence.Registry
 	desktopDeviceID    string
 	broker             *EventBroker
+	fileTransfer       *filetransfer.Service
 	onClipboardRefresh func(clipboard.RefreshEvent)
+	onFileTransfer     func(filetransfer.ProgressEvent)
 	onSessionRefresh   func()
 	mu                 sync.RWMutex
 	effectivePort      *int
@@ -91,7 +95,7 @@ type HTTPServer struct {
 	server             *http.Server
 }
 
-func New(appConfig config.RuntimeConfig, dataStore *store.Store, authService *auth.Service, clipboardService *clipboard.Service, networkService *network.Service, assets embed.FS, presenceRegistry *presence.Registry, desktopDeviceID string, onClipboardRefresh func(clipboard.RefreshEvent), onSessionRefresh func()) (*HTTPServer, error) {
+func New(appConfig config.RuntimeConfig, paths config.AppPaths, dataStore *store.Store, authService *auth.Service, clipboardService *clipboard.Service, networkService *network.Service, assets embed.FS, presenceRegistry *presence.Registry, desktopDeviceID string, onClipboardRefresh func(clipboard.RefreshEvent), onFileTransfer func(filetransfer.ProgressEvent), onSessionRefresh func()) (*HTTPServer, error) {
 	assetFS, err := fs.Sub(assets, "frontend/dist")
 	if err != nil {
 		return nil, err
@@ -107,8 +111,9 @@ func New(appConfig config.RuntimeConfig, dataStore *store.Store, authService *au
 		frontendDevProxy = httputil.NewSingleHostReverseProxy(target)
 	}
 
-	return &HTTPServer{
+	server := &HTTPServer{
 		config:             appConfig,
+		paths:              paths,
 		store:              dataStore,
 		auth:               authService,
 		clipboard:          clipboardService,
@@ -119,9 +124,20 @@ func New(appConfig config.RuntimeConfig, dataStore *store.Store, authService *au
 		desktopDeviceID:    desktopDeviceID,
 		broker:             newEventBroker(),
 		onClipboardRefresh: onClipboardRefresh,
+		onFileTransfer:     onFileTransfer,
 		onSessionRefresh:   onSessionRefresh,
 		state:              "stopped",
-	}, nil
+	}
+
+	fileTransfer, err := filetransfer.New(paths.FileStagingDir, func(event filetransfer.ProgressEvent) {
+		server.PublishFileTransfer(event)
+	})
+	if err != nil {
+		return nil, err
+	}
+	server.fileTransfer = fileTransfer
+
+	return server, nil
 }
 
 func (s *HTTPServer) Status() HttpServerStatus {
@@ -216,6 +232,26 @@ func (s *HTTPServer) PublishRefresh(scope string, itemID *string) {
 	})
 }
 
+func (s *HTTPServer) PublishFileTransfer(event filetransfer.ProgressEvent) {
+	s.broker.publish(ServerEvent{
+		Kind:   "file-transfer",
+		Scope:  "file",
+		ItemID: &event.ItemID,
+		FileTransfer: &FileTransferEvent{
+			ItemID:           event.ItemID,
+			Status:           event.Status,
+			ProgressPercent:  event.ProgressPercent,
+			BytesTransferred: event.BytesTransferred,
+			BytesTotal:       event.BytesTotal,
+			ErrorMessage:     event.ErrorMessage,
+		},
+		TS: nowMs(),
+	})
+	if s.onFileTransfer != nil {
+		s.onFileTransfer(event)
+	}
+}
+
 func (s *HTTPServer) routes() http.Handler {
 	mux := http.NewServeMux()
 	fileServer := http.FileServer(http.FS(s.assets))
@@ -230,6 +266,8 @@ func (s *HTTPServer) routes() http.Handler {
 	mux.HandleFunc("/api/v1/session/rotate-token", s.handleRotateToken)
 	mux.HandleFunc("/api/v1/devices/register", s.handleRegisterDevice)
 	mux.HandleFunc("/api/v1/devices/heartbeat", s.handleHeartbeatDevice)
+	mux.HandleFunc("/api/v1/file-items", s.handleFileItemCollection)
+	mux.HandleFunc("/api/v1/file-items/", s.handleFileItem)
 	mux.HandleFunc("/api/v1/clipboard-items", s.handleClipboardCollection)
 	mux.HandleFunc("/api/v1/clipboard-items/clear", s.handleClearClipboardHistory)
 	mux.HandleFunc("/api/v1/clipboard-items/", s.handleClipboardItem)
@@ -472,7 +510,7 @@ func (s *HTTPServer) handleClipboardCollection(writer http.ResponseWriter, reque
 
 		summaries := make([]store.ClipboardItemSummary, 0, len(items))
 		for _, item := range items {
-			summaries = append(summaries, store.CloneSummary(item))
+			summaries = append(summaries, store.CloneSummary(sanitizeClipboardItemForWebView(item)))
 		}
 		writeAPIResponse(writer, http.StatusOK, clipboard.ListResponse{Items: summaries})
 	case http.MethodPost:
@@ -528,6 +566,141 @@ func (s *HTTPServer) handleClipboardCollection(writer http.ResponseWriter, reque
 	}
 }
 
+func (s *HTTPServer) handleFileItemCollection(writer http.ResponseWriter, request *http.Request) {
+	if _, err := s.authorizeRequest(request); err != nil {
+		writeAPIError(writer, err)
+		return
+	}
+
+	if request.Method != http.MethodPost {
+		writer.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+
+	source, header, err := request.FormFile("file")
+	if err != nil {
+		writeAPIError(writer, apierr.InvalidArgument("invalid file upload"))
+		return
+	}
+	defer source.Close()
+
+	result, err := s.fileTransfer.CreateFileItem(
+		s.store,
+		"mobile_web",
+		nil,
+		header.Filename,
+		header.Header.Get("Content-Type"),
+		source,
+	)
+	if err != nil {
+		writeAPIError(writer, err)
+		return
+	}
+
+	s.PublishRefresh("clipboard", &result.Item.ID)
+	if s.onClipboardRefresh != nil {
+		s.onClipboardRefresh(clipboard.RefreshEvent{
+			ItemID:         result.Item.ID,
+			Created:        result.Created,
+			ReusedExisting: result.ReusedExisting,
+			IsCurrent:      result.Item.IsCurrent,
+			SourceKind:     result.Item.SourceKind,
+			ObservedAtMs:   nowMs(),
+		})
+	}
+
+	writeAPIResponse(writer, http.StatusOK, clipboard.WriteResponse{
+		Item:           result.Item,
+		Created:        result.Created,
+		ReusedExisting: result.ReusedExisting,
+	})
+}
+
+func (s *HTTPServer) handleFileItem(writer http.ResponseWriter, request *http.Request) {
+	if _, err := s.authorizeRequest(request); err != nil {
+		writeAPIError(writer, err)
+		return
+	}
+
+	trimmed := strings.TrimPrefix(request.URL.Path, "/api/v1/file-items/")
+	if trimmed == "" {
+		http.NotFound(writer, request)
+		return
+	}
+
+	if strings.HasSuffix(trimmed, "/receive") {
+		itemID := strings.TrimSuffix(trimmed, "/receive")
+		s.handleFileReceive(writer, request, itemID)
+		return
+	}
+
+	if strings.HasSuffix(trimmed, "/content") {
+		itemID := strings.TrimSuffix(trimmed, "/content")
+		s.handleFileContent(writer, request, itemID)
+		return
+	}
+
+	itemID := path.Clean("/" + trimmed)
+	itemID = strings.TrimPrefix(itemID, "/")
+	if itemID == "" || itemID == "." {
+		http.NotFound(writer, request)
+		return
+	}
+
+	if request.Method != http.MethodGet {
+		writer.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+
+	item, err := s.store.GetClipboardItem(itemID)
+	if err != nil {
+		writeAPIError(writer, err)
+		return
+	}
+	if item == nil {
+		writeAPIError(writer, apierr.NotFound(fmt.Sprintf("clipboard item `%s` not found", itemID)))
+		return
+	}
+
+	writeAPIResponse(writer, http.StatusOK, sanitizeClipboardItemForWebView(*item))
+}
+
+func (s *HTTPServer) handleFileReceive(writer http.ResponseWriter, request *http.Request, itemID string) {
+	if request.Method != http.MethodPost {
+		writer.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+
+	item, err := s.fileTransfer.PrepareReceive(s.store, itemID)
+	if err != nil {
+		writeAPIError(writer, err)
+		return
+	}
+
+	s.PublishRefresh("clipboard", &itemID)
+	if s.onClipboardRefresh != nil {
+		s.onClipboardRefresh(clipboard.RefreshEvent{
+			ItemID:       item.ID,
+			IsCurrent:    item.IsCurrent,
+			SourceKind:   item.SourceKind,
+			ObservedAtMs: nowMs(),
+		})
+	}
+
+	writeAPIResponse(writer, http.StatusOK, item)
+}
+
+func (s *HTTPServer) handleFileContent(writer http.ResponseWriter, request *http.Request, itemID string) {
+	if request.Method != http.MethodGet {
+		writer.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+
+	if err := s.fileTransfer.ServeContent(s.store, writer, request, itemID); err != nil {
+		writeAPIError(writer, err)
+	}
+}
+
 func (s *HTTPServer) handleSyncClipboard(writer http.ResponseWriter, request *http.Request) {
 	if request.Method != http.MethodPost {
 		writer.WriteHeader(http.StatusMethodNotAllowed)
@@ -544,7 +717,23 @@ func (s *HTTPServer) handleSyncClipboard(writer http.ResponseWriter, request *ht
 		return
 	}
 
-	result, err := s.SyncClipboardContent(payload.Content, payload.SourceDeviceID, payload.TargetDeviceIDs, payload.SyncAll)
+	var result SyncClipboardResponse
+	var err error
+	if payload.ItemID != nil && strings.TrimSpace(*payload.ItemID) != "" {
+		item, itemErr := s.store.GetClipboardItem(strings.TrimSpace(*payload.ItemID))
+		err = itemErr
+		if err != nil {
+			writeAPIError(writer, err)
+			return
+		}
+		if item == nil {
+			writeAPIError(writer, apierr.NotFound(fmt.Sprintf("clipboard item `%s` not found", strings.TrimSpace(*payload.ItemID))))
+			return
+		}
+		result, err = s.SyncClipboardItem(*item, payload.SourceDeviceID, payload.TargetDeviceIDs, payload.SyncAll)
+	} else {
+		result, err = s.SyncClipboardContent(payload.Content, payload.SourceDeviceID, payload.TargetDeviceIDs, payload.SyncAll)
+	}
 	if err != nil {
 		writeAPIError(writer, err)
 		return
@@ -645,9 +834,20 @@ func (s *HTTPServer) handleActivateClipboardItem(writer http.ResponseWriter, req
 		writeAPIError(writer, apierr.NotFound(fmt.Sprintf("clipboard item `%s` not found", itemID)))
 		return
 	}
-	if err := s.clipboard.WriteText(item.Content); err != nil {
-		writeAPIError(writer, err)
-		return
+	if item.ItemKind == store.ClipboardItemKindFile {
+		if item.FileMeta == nil || item.FileMeta.LocalPath == nil {
+			writeAPIError(writer, apierr.State("file clipboard content is unavailable"))
+			return
+		}
+		if err := s.clipboard.WriteFile(*item.FileMeta.LocalPath); err != nil {
+			writeAPIError(writer, err)
+			return
+		}
+	} else {
+		if err := s.clipboard.WriteText(item.Content); err != nil {
+			writeAPIError(writer, err)
+			return
+		}
 	}
 	activated, err := s.store.ActivateClipboardItem(itemID)
 	if err != nil {
@@ -742,12 +942,16 @@ func (s *HTTPServer) ListOnlineDevices(excludeIDs ...string) []OnlineDevice {
 	return s.listOnlineDevices(excludeIDs...)
 }
 
-func (s *HTTPServer) SyncClipboardContent(content, sourceDeviceID string, targetDeviceIDs []string, syncAll bool) (SyncClipboardResponse, error) {
-	trimmed := strings.TrimSpace(content)
-	if trimmed == "" {
-		return SyncClipboardResponse{}, apierr.InvalidArgument("clipboard content cannot be empty")
+func (s *HTTPServer) ReceiveClipboardFile(itemID, targetDir string) (store.ClipboardItemRecord, error) {
+	item, err := s.fileTransfer.ReceiveToDirectory(s.store, itemID, targetDir)
+	if err != nil {
+		return store.ClipboardItemRecord{}, err
 	}
+	s.PublishRefresh("clipboard", &item.ID)
+	return item, nil
+}
 
+func (s *HTTPServer) SyncClipboardItem(item store.ClipboardItemRecord, sourceDeviceID string, targetDeviceIDs []string, syncAll bool) (SyncClipboardResponse, error) {
 	sourceName := "Unknown Device"
 	if sourceDeviceID != "" {
 		source, ok := s.presence.Touch(sourceDeviceID)
@@ -770,26 +974,35 @@ func (s *HTTPServer) SyncClipboardContent(content, sourceDeviceID string, target
 		response.DeliveredDevices = append(response.DeliveredDevices, s.buildOnlineDevice(target))
 
 		if target.ID == s.desktopDeviceID {
-			item, err := s.store.SaveClipboardItem(store.SaveClipboardInput{
-				Content:     trimmed,
-				SourceKind:  sourceName,
-				Pinned:      false,
-				MarkCurrent: false,
+			saved, err := s.store.SaveClipboardItem(store.SaveClipboardInput{
+				ItemKind:       item.ItemKind,
+				Content:        item.Content,
+				ContentType:    item.ContentType,
+				Hash:           item.Hash,
+				Preview:        item.Preview,
+				CharCount:      item.CharCount,
+				FileMeta:       cloneFileMetaForDesktopTarget(item.FileMeta),
+				SourceKind:     sourceName,
+				SourceDeviceID: nil,
+				Pinned:         item.Pinned,
+				MarkCurrent:    false,
 			}, s.config.ClipboardPollInterval, s.config.MaxTextBytes)
 			if err != nil {
 				return SyncClipboardResponse{}, err
 			}
-
-			copy := item.Item
+			if saved.Item.ItemKind == store.ClipboardItemKindFile {
+				s.startDesktopFileTransfer(saved.Item.ID)
+			}
+			copy := sanitizeClipboardItemForWebView(saved.Item)
 			response.DesktopItem = &copy
-			s.PublishRefresh("clipboard", &item.Item.ID)
+			s.PublishRefresh("clipboard", &saved.Item.ID)
 			if s.onClipboardRefresh != nil {
 				s.onClipboardRefresh(clipboard.RefreshEvent{
-					ItemID:         item.Item.ID,
-					Created:        item.Created,
-					ReusedExisting: item.ReusedExisting,
-					IsCurrent:      item.Item.IsCurrent,
-					SourceKind:     item.Item.SourceKind,
+					ItemID:         saved.Item.ID,
+					Created:        saved.Created,
+					ReusedExisting: saved.ReusedExisting,
+					IsCurrent:      saved.Item.IsCurrent,
+					SourceKind:     saved.Item.SourceKind,
 					ObservedAtMs:   nowMs(),
 				})
 			}
@@ -805,8 +1018,7 @@ func (s *HTTPServer) SyncClipboardContent(content, sourceDeviceID string, target
 			Scope: "clipboard",
 			Sync: &SyncClipboardEvent{
 				TargetDeviceIDs: webTargetIDs,
-				Content:         trimmed,
-				SourceKind:      sourceName,
+				Item:            sanitizeClipboardItemForSync(item, sourceName, nil),
 				CreatedAt:       nowMs(),
 			},
 			TS: nowMs(),
@@ -814,6 +1026,23 @@ func (s *HTTPServer) SyncClipboardContent(content, sourceDeviceID string, target
 	}
 
 	return response, nil
+}
+
+func (s *HTTPServer) SyncClipboardContent(content, sourceDeviceID string, targetDeviceIDs []string, syncAll bool) (SyncClipboardResponse, error) {
+	trimmed := strings.TrimSpace(content)
+	if trimmed == "" {
+		return SyncClipboardResponse{}, apierr.InvalidArgument("clipboard content cannot be empty")
+	}
+	return s.SyncClipboardItem(store.ClipboardItemRecord{
+		ItemKind:    store.ClipboardItemKindText,
+		Content:     trimmed,
+		ContentType: "text/plain",
+		Hash:        "",
+		Preview:     trimmed,
+		CharCount:   len([]rune(trimmed)),
+		SourceKind:  "mobile_web",
+		Pinned:      false,
+	}, sourceDeviceID, targetDeviceIDs, syncAll)
 }
 
 func (s *HTTPServer) authorizeRequest(request *http.Request) (store.SessionRecord, error) {
@@ -935,6 +1164,75 @@ func cloneStringPointer(value *string) *string {
 	}
 	copy := *value
 	return &copy
+}
+
+func cloneFileMetaForDesktopTarget(meta *store.ClipboardFileMeta) *store.ClipboardFileMeta {
+	if meta == nil {
+		return nil
+	}
+	copy := *meta
+	copy.TransferState = store.TransferStateReceiving
+	copy.ProgressPercent = 0
+	copy.DownloadedAt = nil
+	return &copy
+}
+
+func sanitizeClipboardItemForSync(item store.ClipboardItemRecord, sourceKind string, sourceDeviceID *string) store.ClipboardItemRecord {
+	sanitized := item
+	sanitized.SourceKind = sourceKind
+	sanitized.SourceDeviceID = sourceDeviceID
+	sanitized.FileMeta = sanitizeClipboardFileMeta(item.FileMeta)
+	return sanitized
+}
+
+func sanitizeClipboardFileMeta(meta *store.ClipboardFileMeta) *store.ClipboardFileMeta {
+	if meta == nil {
+		return nil
+	}
+	copy := *meta
+	copy.TransferState = store.TransferStateReceiving
+	copy.ProgressPercent = 0
+	copy.LocalPath = nil
+	copy.DownloadedAt = nil
+	return &copy
+}
+
+func sanitizeClipboardItemForWebView(item store.ClipboardItemRecord) store.ClipboardItemRecord {
+	sanitized := item
+	sanitized.FileMeta = sanitizeClipboardFileMetaForWebView(item.FileMeta)
+	return sanitized
+}
+
+func sanitizeClipboardFileMetaForWebView(meta *store.ClipboardFileMeta) *store.ClipboardFileMeta {
+	if meta == nil {
+		return nil
+	}
+	copy := *meta
+	if copy.TransferState != store.TransferStateFailed {
+		copy.TransferState = store.TransferStateMetadataOnly
+		copy.ProgressPercent = 0
+	}
+	copy.LocalPath = nil
+	copy.DownloadedAt = nil
+	return &copy
+}
+
+func (s *HTTPServer) startDesktopFileTransfer(itemID string) {
+	go func() {
+		item, err := s.fileTransfer.ReceiveToDirectory(s.store, itemID, s.paths.DesktopReceiveDir)
+		if err != nil {
+			return
+		}
+		s.PublishRefresh("clipboard", &item.ID)
+		if s.onClipboardRefresh != nil {
+			s.onClipboardRefresh(clipboard.RefreshEvent{
+				ItemID:       item.ID,
+				IsCurrent:    item.IsCurrent,
+				SourceKind:   item.SourceKind,
+				ObservedAtMs: nowMs(),
+			})
+		}
+	}()
 }
 
 func nowMs() int64 {

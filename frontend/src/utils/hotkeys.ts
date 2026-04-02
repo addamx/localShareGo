@@ -1,6 +1,31 @@
 const modifierKeys = new Set(["Control", "Shift", "Alt", "Meta"]);
+const modifierCodes = new Set([
+  "ControlLeft",
+  "ControlRight",
+  "ShiftLeft",
+  "ShiftRight",
+  "AltLeft",
+  "AltRight",
+  "MetaLeft",
+  "MetaRight",
+]);
 
-export function formatHotkeyFromKeyboardEvent(event: KeyboardEvent) {
+export function formatHotkeyFromKeyboardEvent(event: KeyboardEvent, allowModifiersOnly = false) {
+  const parts = collectModifierParts(event);
+
+  const mainKey = normalizeMainKey(event);
+  if (!mainKey) {
+    if (!allowModifiersOnly) {
+      return "";
+    }
+    return parts.join("+");
+  }
+
+  parts.push(mainKey);
+  return parts.join("+");
+}
+
+function collectModifierParts(event: KeyboardEvent) {
   const parts: string[] = [];
 
   if (event.ctrlKey) {
@@ -16,16 +41,67 @@ export function formatHotkeyFromKeyboardEvent(event: KeyboardEvent) {
     parts.push("Win");
   }
 
-  const mainKey = normalizeMainKey(event.key);
-  if (!mainKey || modifierKeys.has(event.key)) {
+  return parts;
+}
+
+function normalizeMainKey(event: KeyboardEvent) {
+  const codeKey = normalizeMainKeyFromCode(event.code);
+  if (codeKey) {
+    return codeKey;
+  }
+
+  if (modifierKeys.has(event.key) || modifierCodes.has(event.code)) {
     return "";
   }
 
-  parts.push(mainKey);
-  return parts.join("+");
+  return normalizeMainKeyFromKey(event.key);
 }
 
-function normalizeMainKey(key: string) {
+function normalizeMainKeyFromCode(code: string) {
+  if (!code || modifierCodes.has(code)) {
+    return "";
+  }
+
+  if (code.startsWith("Key") && code.length === 4) {
+    return code.slice(3);
+  }
+  if (code.startsWith("Digit") && code.length === 6) {
+    return code.slice(5);
+  }
+
+  switch (code) {
+    case "Backquote":
+      return "`";
+    case "Space":
+      return "Space";
+    case "Tab":
+    case "Enter":
+    case "Escape":
+    case "Backspace":
+    case "Insert":
+    case "Delete":
+    case "Home":
+    case "End":
+    case "PageUp":
+    case "PageDown":
+      return code;
+    case "ArrowLeft":
+      return "Left";
+    case "ArrowUp":
+      return "Up";
+    case "ArrowRight":
+      return "Right";
+    case "ArrowDown":
+      return "Down";
+    default:
+      if (/^F([1-9]|1\d|2[0-4])$/.test(code)) {
+        return code;
+      }
+      return "";
+  }
+}
+
+function normalizeMainKeyFromKey(key: string) {
   if (!key) {
     return "";
   }
@@ -38,6 +114,8 @@ function normalizeMainKey(key: string) {
   }
 
   switch (key) {
+    case "`":
+      return "`";
     case " ":
       return "Space";
     case "Tab":

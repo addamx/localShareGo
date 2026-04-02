@@ -7,7 +7,11 @@ export interface Notice {
 
 export interface AppBootstrap {
   appName: string;
-  paths: { databasePath: string };
+  paths: {
+    databasePath: string;
+    fileStagingDir: string;
+    desktopReceiveDir: string;
+  };
   runtimeConfig: { maxTextBytes: number; webRoute: string };
   services: {
     clipboard: { pollIntervalMs: number };
@@ -35,11 +39,30 @@ export interface ClipboardListQuery {
   limit: number;
 }
 
+export type ClipboardItemKind = "text" | "file";
+export type ClipboardTransferState = "metadata_only" | "receiving" | "received" | "failed";
+
+export interface ClipboardFileMeta {
+  fileName: string;
+  extension: string;
+  mimeType: string;
+  sizeBytes: number;
+  thumbnailDataUrl: string | null;
+  transferState: ClipboardTransferState;
+  progressPercent: number;
+  localPath: string | null;
+  downloadedAt: number | null;
+}
+
 export interface ClipboardItemRecord {
+  itemKind: ClipboardItemKind;
   id: string;
   content: string;
+  contentType: string;
+  hash: string;
   preview: string;
   charCount: number;
+  fileMeta: ClipboardFileMeta | null;
   sourceKind: string;
   sourceDeviceId: string | null;
   pinned: boolean;
@@ -49,9 +72,12 @@ export interface ClipboardItemRecord {
 }
 
 export interface ClipboardItemSummary {
+  itemKind: ClipboardItemKind;
   id: string;
   preview: string;
   charCount: number;
+  contentType: string;
+  fileMeta: ClipboardFileMeta | null;
   sourceKind: string;
   sourceDeviceId: string | null;
   pinned: boolean;
@@ -93,6 +119,7 @@ export interface DevicePresenceResponse {
 }
 
 export interface SyncClipboardRequest {
+  itemId?: string | null;
   content: string;
   sourceDeviceId: string;
   targetDeviceIds: string[];
@@ -113,9 +140,17 @@ export interface ClipboardRefreshEvent {
 
 export interface SyncClipboardEvent {
   targetDeviceIds: string[];
-  content: string;
-  sourceKind: string;
+  item: ClipboardItemRecord;
   createdAt: number;
+}
+
+export interface FileTransferEvent {
+  itemId: string;
+  status: ClipboardTransferState;
+  progressPercent: number;
+  bytesTransferred: number;
+  bytesTotal: number;
+  errorMessage: string | null;
 }
 
 export interface ServerEvent {
@@ -123,6 +158,7 @@ export interface ServerEvent {
   scope: string;
   itemId: string | null;
   sync: SyncClipboardEvent | null;
+  fileTransfer: FileTransferEvent | null;
   ts: number;
 }
 

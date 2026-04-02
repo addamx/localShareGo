@@ -71,6 +71,9 @@ func (s *Store) load() error {
 	if err := json.Unmarshal(content, &next); err != nil {
 		return err
 	}
+	for index := range next.ClipboardItems {
+		normalizeClipboardItemRecord(&next.ClipboardItems[index])
+	}
 
 	s.data = next
 	return nil
@@ -336,20 +339,15 @@ func (s *Store) RotateSession(currentSessionID, nextTokenHash string, expiresAt,
 }
 
 func (s *Store) SaveClipboardItem(input SaveClipboardInput, dedupWindowMs, maxTextBytes int) (SaveClipboardResult, error) {
-	content := strings.TrimSpace(input.Content)
-	if content == "" {
-		return SaveClipboardResult{}, apierr.InvalidArgument("clipboard content cannot be empty")
-	}
-	if len([]byte(content)) > maxTextBytes {
-		return SaveClipboardResult{}, apierr.InvalidArgument("clipboard content exceeds max size")
+	itemKind, content, contentType, hash, preview, charCount, fileMeta, err := prepareClipboardItem(input, maxTextBytes)
+	if err != nil {
+		return SaveClipboardResult{}, err
 	}
 	if input.SourceDeviceID != nil && s.GetDevice(*input.SourceDeviceID) == nil {
 		return SaveClipboardResult{}, apierr.InvalidArgument("source device does not exist")
 	}
 
 	now := nowMs()
-	hash := hashText(content)
-	preview := buildPreview(content)
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -366,14 +364,20 @@ func (s *Store) SaveClipboardItem(input SaveClipboardInput, dedupWindowMs, maxTe
 
 	dedupThreshold := now - int64(maxInt(dedupWindowMs, 0))
 	for index, item := range s.data.ClipboardItems {
-		if item.DeletedAt != nil || item.Hash != hash || item.CreatedAt < dedupThreshold {
+		if item.DeletedAt != nil || item.ItemKind != itemKind || item.Hash != hash || item.CreatedAt < dedupThreshold {
 			continue
 		}
 		item.Pinned = item.Pinned || input.Pinned
+		item.Content = content
+		item.ContentType = contentType
+		item.Preview = preview
+		item.CharCount = charCount
+		item.FileMeta = cloneFileMeta(fileMeta)
 		if input.MarkCurrent {
 			item.IsCurrent = true
 		}
 		item.UpdatedAt = now
+		normalizeClipboardItemRecord(&item)
 		s.data.ClipboardItems[index] = item
 		if err := s.saveLocked(); err != nil {
 			return SaveClipboardResult{}, err
@@ -386,12 +390,14 @@ func (s *Store) SaveClipboardItem(input SaveClipboardInput, dedupWindowMs, maxTe
 	}
 
 	record := ClipboardItemRecord{
+		ItemKind:       itemKind,
 		ID:             uuid.NewString(),
 		Content:        content,
-		ContentType:    "text/plain",
+		ContentType:    contentType,
 		Hash:           hash,
 		Preview:        preview,
-		CharCount:      len([]rune(content)),
+		CharCount:      charCount,
+		FileMeta:       cloneFileMeta(fileMeta),
 		SourceKind:     input.SourceKind,
 		SourceDeviceID: input.SourceDeviceID,
 		Pinned:         input.Pinned,
@@ -399,6 +405,7 @@ func (s *Store) SaveClipboardItem(input SaveClipboardInput, dedupWindowMs, maxTe
 		CreatedAt:      now,
 		UpdatedAt:      now,
 	}
+	normalizeClipboardItemRecord(&record)
 	s.data.ClipboardItems = append(s.data.ClipboardItems, record)
 	if err := s.saveLocked(); err != nil {
 		return SaveClipboardResult{}, err
@@ -534,12 +541,14 @@ func (s *Store) ReplaceClipboardItemWithCurrent(itemID, sourceKind string, sourc
 	s.data.ClipboardItems[found] = replaced
 
 	record := ClipboardItemRecord{
+		ItemKind:       replaced.ItemKind,
 		ID:             uuid.NewString(),
 		Content:        replaced.Content,
 		ContentType:    replaced.ContentType,
 		Hash:           replaced.Hash,
 		Preview:        replaced.Preview,
 		CharCount:      replaced.CharCount,
+		FileMeta:       cloneFileMeta(replaced.FileMeta),
 		SourceKind:     sourceKind,
 		SourceDeviceID: sourceDeviceID,
 		Pinned:         replaced.Pinned,
@@ -610,9 +619,12 @@ func (s *Store) ClearClipboardHistory() (int, error) {
 
 func CloneSummary(item ClipboardItemRecord) ClipboardItemSummary {
 	return ClipboardItemSummary{
+		ItemKind:       item.ItemKind,
 		ID:             item.ID,
 		Preview:        item.Preview,
 		CharCount:      item.CharCount,
+		ContentType:    item.ContentType,
+		FileMeta:       cloneFileMeta(item.FileMeta),
 		SourceKind:     item.SourceKind,
 		SourceDeviceID: item.SourceDeviceID,
 		Pinned:         item.Pinned,
@@ -638,6 +650,15 @@ func hashText(value string) string {
 	return hex.EncodeToString(sum[:])
 }
 
+func hashFileMeta(meta ClipboardFileMeta) string {
+	return hashText(strings.Join([]string{
+		meta.FileName,
+		meta.Extension,
+		meta.MIMEType,
+		fmt.Sprintf("%d", meta.SizeBytes),
+	}, "\n"))
+}
+
 func buildPreview(content string) string {
 	normalized := strings.Join(strings.Fields(content), " ")
 	runes := []rune(normalized)
@@ -656,4 +677,123 @@ func maxInt(a, b int) int {
 		return a
 	}
 	return b
+}
+
+func prepareClipboardItem(input SaveClipboardInput, maxTextBytes int) (string, string, string, string, string, int, *ClipboardFileMeta, error) {
+	itemKind := normalizeItemKind(input.ItemKind)
+	if itemKind == ClipboardItemKindFile {
+		if input.FileMeta == nil {
+			return "", "", "", "", "", 0, nil, apierr.InvalidArgument("file clipboard metadata cannot be empty")
+		}
+
+		fileMeta := cloneFileMeta(input.FileMeta)
+		normalizeClipboardFileMeta(fileMeta)
+		if strings.TrimSpace(fileMeta.FileName) == "" {
+			return "", "", "", "", "", 0, nil, apierr.InvalidArgument("file name cannot be empty")
+		}
+		contentType := strings.TrimSpace(input.ContentType)
+		if contentType == "" {
+			contentType = fileContentType(fileMeta)
+		}
+		hash := strings.TrimSpace(input.Hash)
+		if hash == "" {
+			hash = hashFileMeta(*fileMeta)
+		}
+		preview := strings.TrimSpace(input.Preview)
+		if preview == "" {
+			preview = fileMeta.FileName
+		}
+		return itemKind, "", contentType, hash, preview, 0, fileMeta, nil
+	}
+
+	content := strings.TrimSpace(input.Content)
+	if content == "" {
+		return "", "", "", "", "", 0, nil, apierr.InvalidArgument("clipboard content cannot be empty")
+	}
+	if len([]byte(content)) > maxTextBytes {
+		return "", "", "", "", "", 0, nil, apierr.InvalidArgument("clipboard content exceeds max size")
+	}
+	contentType := strings.TrimSpace(input.ContentType)
+	if contentType == "" {
+		contentType = "text/plain"
+	}
+	hash := strings.TrimSpace(input.Hash)
+	if hash == "" {
+		hash = hashText(content)
+	}
+	preview := strings.TrimSpace(input.Preview)
+	if preview == "" {
+		preview = buildPreview(content)
+	}
+	charCount := input.CharCount
+	if charCount <= 0 {
+		charCount = len([]rune(content))
+	}
+	return ClipboardItemKindText, content, contentType, hash, preview, charCount, nil, nil
+}
+
+func normalizeClipboardItemRecord(item *ClipboardItemRecord) {
+	item.ItemKind = normalizeItemKind(item.ItemKind)
+	if item.ItemKind == ClipboardItemKindFile {
+		item.Content = ""
+		item.CharCount = 0
+		if item.FileMeta != nil {
+			normalizeClipboardFileMeta(item.FileMeta)
+			if strings.TrimSpace(item.Preview) == "" {
+				item.Preview = item.FileMeta.FileName
+			}
+		}
+		if strings.TrimSpace(item.ContentType) == "" {
+			item.ContentType = fileContentType(item.FileMeta)
+		}
+		return
+	}
+
+	item.FileMeta = nil
+	if strings.TrimSpace(item.ContentType) == "" {
+		item.ContentType = "text/plain"
+	}
+	if item.CharCount == 0 && item.Content != "" {
+		item.CharCount = len([]rune(item.Content))
+	}
+	if strings.TrimSpace(item.Preview) == "" {
+		item.Preview = buildPreview(item.Content)
+	}
+}
+
+func normalizeClipboardFileMeta(meta *ClipboardFileMeta) {
+	meta.FileName = strings.TrimSpace(meta.FileName)
+	meta.Extension = strings.TrimSpace(meta.Extension)
+	meta.MIMEType = strings.TrimSpace(meta.MIMEType)
+	if meta.TransferState == "" {
+		meta.TransferState = TransferStateMetadataOnly
+	}
+	if meta.ProgressPercent < 0 {
+		meta.ProgressPercent = 0
+	}
+	if meta.ProgressPercent > 100 {
+		meta.ProgressPercent = 100
+	}
+}
+
+func normalizeItemKind(value string) string {
+	if strings.TrimSpace(value) == ClipboardItemKindFile {
+		return ClipboardItemKindFile
+	}
+	return ClipboardItemKindText
+}
+
+func cloneFileMeta(meta *ClipboardFileMeta) *ClipboardFileMeta {
+	if meta == nil {
+		return nil
+	}
+	copy := *meta
+	return &copy
+}
+
+func fileContentType(meta *ClipboardFileMeta) string {
+	if meta != nil && strings.TrimSpace(meta.MIMEType) != "" {
+		return meta.MIMEType
+	}
+	return "application/octet-stream"
 }

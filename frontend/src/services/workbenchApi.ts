@@ -31,12 +31,14 @@ export function createWorkbenchApiClient(origin: string, token: string) {
   };
 
   const request = async <T,>(path: string, init: RequestInit = {}): Promise<T> => {
+    const headers = new Headers(init.headers);
+    headers.set("Accept", "application/json");
+    if (init.body && !(init.body instanceof FormData) && !headers.has("Content-Type")) {
+      headers.set("Content-Type", "application/json");
+    }
     const response = await fetch(withToken(path), {
       ...init,
-      headers: {
-        Accept: "application/json",
-        ...(init.body ? { "Content-Type": "application/json" } : {}),
-      },
+      headers,
     });
     const payload = (await response.json()) as ApiEnvelope<T>;
     if (!response.ok || !payload.ok || !payload.data) {
@@ -82,6 +84,14 @@ export function createWorkbenchApiClient(origin: string, token: string) {
         method: "POST",
         body: JSON.stringify({ content, pinned: false, activate: false }),
       }),
+    createFileItem: (file: File) => {
+      const body = new FormData();
+      body.set("file", file);
+      return request<ClipboardWriteResponse>("/api/v1/file-items", {
+        method: "POST",
+        body,
+      });
+    },
     activateClipboardItem: (itemId: string) =>
       request<ClipboardItemRecord>(
         `/api/v1/clipboard-items/${encodeURIComponent(itemId)}/activate`,
@@ -92,6 +102,12 @@ export function createWorkbenchApiClient(origin: string, token: string) {
         method: "POST",
         body: JSON.stringify(payload),
       }),
+    receiveFileItem: (itemId: string) =>
+      request<ClipboardItemRecord>(`/api/v1/file-items/${encodeURIComponent(itemId)}/receive`, {
+        method: "POST",
+      }),
+    fileContentUrl: (itemId: string) =>
+      withToken(`/api/v1/file-items/${encodeURIComponent(itemId)}/content`).toString(),
     eventsUrl: () => withToken("/api/v1/events").toString(),
   };
 }

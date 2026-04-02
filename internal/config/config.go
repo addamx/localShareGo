@@ -29,6 +29,8 @@ type AppPaths struct {
 	AppDir              string `json:"appDir"`
 	DataDir             string `json:"dataDir"`
 	DatabasePath        string `json:"databasePath"`
+	FileStagingDir      string `json:"fileStagingDir"`
+	DesktopReceiveDir   string `json:"desktopReceiveDir"`
 	DesktopSettingsPath string `json:"desktopSettingsPath"`
 	LogsDir             string `json:"logsDir"`
 }
@@ -54,21 +56,32 @@ func ResolveAppPaths(config RuntimeConfig) AppPaths {
 	appDir := filepath.Join(root, "LocalShareGo")
 	dataDir := filepath.Join(appDir, "data")
 	logsDir := filepath.Join(appDir, "logs")
+	downloadDir := resolveDownloadDir(appDir)
 
 	return AppPaths{
 		AppDir:              appDir,
 		DataDir:             dataDir,
 		DatabasePath:        filepath.Join(dataDir, config.DatabaseFileName),
+		FileStagingDir:      filepath.Join(dataDir, "file-staging"),
+		DesktopReceiveDir:   downloadDir,
 		DesktopSettingsPath: filepath.Join(dataDir, "desktop-settings.json"),
 		LogsDir:             logsDir,
 	}
 }
 
 func EnsureAppDirs(paths AppPaths) error {
-	for _, dir := range []string{paths.AppDir, paths.DataDir, paths.LogsDir} {
+	for _, dir := range []string{paths.AppDir, paths.DataDir, paths.FileStagingDir, paths.LogsDir} {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+func resolveDownloadDir(appDir string) string {
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		return filepath.Join(appDir, "downloads")
+	}
+	return filepath.Join(home, "Downloads", "LocalShareGo")
 }

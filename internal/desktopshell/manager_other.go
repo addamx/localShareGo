@@ -11,6 +11,7 @@ import (
 
 type noopManager struct {
 	settings *settings.Service
+	pinned   bool
 }
 
 func newPlatformManager(paths config.AppPaths, _ []byte) (platformManager, error) {
@@ -28,7 +29,19 @@ func (m *noopManager) Show() error {
 }
 
 func (m *noopManager) Hide() error {
+	if m.pinned {
+		return nil
+	}
 	return nil
+}
+
+func (m *noopManager) IsPinned() bool {
+	return m.pinned
+}
+
+func (m *noopManager) SetPinned(pinned bool) bool {
+	m.pinned = pinned
+	return m.pinned
 }
 
 func (m *noopManager) Settings() (settings.DesktopSettings, error) {

@@ -3,29 +3,32 @@ package clipboard
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
 
 	"localShareGo/internal/apierr"
+	"localShareGo/internal/fileclip"
 	"localShareGo/internal/store"
 )
 
 const defaultDedupWindowMs = 1600
 
 type Service struct {
-	store             *store.Store
-	pollIntervalMs    int
-	maxTextBytes      int
-	dedupWindowMs     int
-	sourceDeviceID    *string
-	onRefresh         func(RefreshEvent)
-	mu                sync.RWMutex
-	running           bool
-	stop              chan struct{}
-	lastProcessedHash string
-	lastFailedHash    string
-	lastFailedAtMs    int64
+	store            *store.Store
+	pollIntervalMs   int
+	maxTextBytes     int
+	dedupWindowMs    int
+	sourceDeviceID   *string
+	onRefresh        func(RefreshEvent)
+	mu               sync.RWMutex
+	running          bool
+	stop             chan struct{}
+	lastProcessedKey string
+	lastFailedKey    string
+	lastFailedAtMs   int64
 }
 
 func New(store *store.Store, pollIntervalMs, maxTextBytes int, sourceDeviceID *string, onRefresh func(RefreshEvent)) *Service {
@@ -90,8 +93,26 @@ func (c *Service) WriteText(text string) error {
 	}
 
 	c.mu.Lock()
-	c.lastProcessedHash = hashText(trimmed)
-	c.lastFailedHash = ""
+	c.lastProcessedKey = textClipboardKey(trimmed)
+	c.lastFailedKey = ""
+	c.lastFailedAtMs = 0
+	c.mu.Unlock()
+	return nil
+}
+
+func (c *Service) WriteFile(path string) error {
+	cleanPath := filepath.Clean(path)
+	meta, err := fileclip.InspectPath(cleanPath)
+	if err != nil {
+		return apierr.State(err.Error())
+	}
+	if err := fileclip.WriteClipboardFile(cleanPath); err != nil {
+		return apierr.State(err.Error())
+	}
+
+	c.mu.Lock()
+	c.lastProcessedKey = fileClipboardKey(cleanPath, meta)
+	c.lastFailedKey = ""
 	c.lastFailedAtMs = 0
 	c.mu.Unlock()
 	return nil
@@ -112,16 +133,21 @@ func (c *Service) runLoop(stop <-chan struct{}) {
 }
 
 func (c *Service) tick() {
+	if fileItem, ok, err := fileclip.ReadClipboardFile(); err == nil && ok {
+		c.tickFile(fileItem)
+		return
+	}
+
 	text, err := readClipboardText()
 	if err != nil || strings.TrimSpace(text) == "" {
 		return
 	}
 
-	hash := hashText(text)
+	key := textClipboardKey(text)
 	now := nowMs()
 
 	c.mu.RLock()
-	shouldSkip := c.lastProcessedHash == hash || (c.lastFailedHash == hash && now-c.lastFailedAtMs < int64(maxInt(c.dedupWindowMs*2, 3000)))
+	shouldSkip := c.lastProcessedKey == key || (c.lastFailedKey == key && now-c.lastFailedAtMs < int64(maxInt(c.dedupWindowMs*2, 3000)))
 	c.mu.RUnlock()
 	if shouldSkip {
 		return
@@ -129,14 +155,19 @@ func (c *Service) tick() {
 
 	if len([]byte(text)) > c.maxTextBytes {
 		c.mu.Lock()
-		c.lastFailedHash = hash
+		c.lastFailedKey = key
 		c.lastFailedAtMs = now
 		c.mu.Unlock()
 		return
 	}
 
 	result, err := c.store.SaveClipboardItem(store.SaveClipboardInput{
+		ItemKind:       store.ClipboardItemKindText,
 		Content:        text,
+		ContentType:    "text/plain",
+		Hash:           key,
+		Preview:        buildTextPreview(text),
+		CharCount:      len([]rune(text)),
 		SourceKind:     "desktop_local",
 		SourceDeviceID: c.sourceDeviceID,
 		Pinned:         false,
@@ -144,15 +175,15 @@ func (c *Service) tick() {
 	}, c.dedupWindowMs, c.maxTextBytes)
 	if err != nil {
 		c.mu.Lock()
-		c.lastFailedHash = hash
+		c.lastFailedKey = key
 		c.lastFailedAtMs = now
 		c.mu.Unlock()
 		return
 	}
 
 	c.mu.Lock()
-	c.lastProcessedHash = hash
-	c.lastFailedHash = ""
+	c.lastProcessedKey = key
+	c.lastFailedKey = ""
 	c.lastFailedAtMs = 0
 	c.mu.Unlock()
 
@@ -168,9 +199,96 @@ func (c *Service) tick() {
 	}
 }
 
+func (c *Service) tickFile(item fileclip.ClipboardFile) {
+	key := fileClipboardKey(item.Path, item.Metadata)
+	now := nowMs()
+
+	c.mu.RLock()
+	shouldSkip := c.lastProcessedKey == key || (c.lastFailedKey == key && now-c.lastFailedAtMs < int64(maxInt(c.dedupWindowMs*2, 3000)))
+	c.mu.RUnlock()
+	if shouldSkip {
+		return
+	}
+
+	result, err := c.store.SaveClipboardItem(store.SaveClipboardInput{
+		ItemKind:    store.ClipboardItemKindFile,
+		Content:     "",
+		ContentType: item.Metadata.MIMEType,
+		Hash:        key,
+		Preview:     item.Metadata.FileName,
+		CharCount:   0,
+		FileMeta: &store.ClipboardFileMeta{
+			FileName:         item.Metadata.FileName,
+			Extension:        item.Metadata.Extension,
+			MIMEType:         item.Metadata.MIMEType,
+			SizeBytes:        item.Metadata.SizeBytes,
+			ThumbnailDataURL: item.Metadata.ThumbnailDataURL,
+			TransferState:    store.TransferStateReceived,
+			ProgressPercent:  100,
+			LocalPath:        &item.Path,
+			DownloadedAt:     optionalNowMs(now),
+		},
+		SourceKind:     "desktop_local",
+		SourceDeviceID: c.sourceDeviceID,
+		Pinned:         false,
+		MarkCurrent:    true,
+	}, c.dedupWindowMs, c.maxTextBytes)
+	if err != nil {
+		c.mu.Lock()
+		c.lastFailedKey = key
+		c.lastFailedAtMs = now
+		c.mu.Unlock()
+		return
+	}
+
+	c.mu.Lock()
+	c.lastProcessedKey = key
+	c.lastFailedKey = ""
+	c.lastFailedAtMs = 0
+	c.mu.Unlock()
+
+	if c.onRefresh != nil {
+		c.onRefresh(RefreshEvent{
+			ItemID:         result.Item.ID,
+			Created:        result.Created,
+			ReusedExisting: result.ReusedExisting,
+			IsCurrent:      result.Item.IsCurrent,
+			SourceKind:     result.Item.SourceKind,
+			ObservedAtMs:   nowMs(),
+		})
+	}
+}
+
+func optionalNowMs(value int64) *int64 {
+	return &value
+}
+
 func hashText(value string) string {
 	sum := sha256.Sum256([]byte(value))
 	return hex.EncodeToString(sum[:])
+}
+
+func textClipboardKey(value string) string {
+	return "text:" + hashText(value)
+}
+
+func fileClipboardKey(path string, meta fileclip.Metadata) string {
+	return "file:" + hashText(strings.Join([]string{
+		path,
+		meta.FileName,
+		meta.Extension,
+		meta.MIMEType,
+		fmt.Sprintf("%d", meta.SizeBytes),
+	}, "\n"))
+}
+
+func buildTextPreview(content string) string {
+	normalized := strings.Join(strings.Fields(content), " ")
+	runes := []rune(normalized)
+	if len(runes) <= 120 {
+		return normalized
+	}
+	return string(runes[:120]) + "..."
 }
 
 func nowMs() int64 {

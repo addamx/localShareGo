@@ -10,7 +10,14 @@ interface DesktopAppApi {
   GetConnectivityReport(): Promise<any>;
   ListOnlineDevices(): Promise<any[]>;
   SyncClipboardItem(itemId: string, targetDeviceIds: string[], syncAll: boolean): Promise<any>;
+  ReceiveClipboardFile(itemId: string): Promise<any>;
   CopyText(text: string): Promise<void>;
+  HideDesktopApp(): Promise<void>;
+  ShowDesktopApp(): Promise<void>;
+  GetDesktopPinned(): Promise<boolean>;
+  SetDesktopPinned(pinned: boolean): Promise<boolean>;
+  GetDesktopSettings(): Promise<any>;
+  UpdateDesktopSettings(input: any): Promise<any>;
   OpenURL(url: string): void;
 }
 

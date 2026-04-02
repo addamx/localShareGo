@@ -13,6 +13,8 @@ export {
   Search as SearchIcon,
   Settings as SettingsIcon,
   Share2 as ShareLogoIcon,
+  Pin as PinIcon,
+  PinOff as PinOffIcon,
   Trash2 as DeleteIcon,
   X as CloseIcon,
 } from "lucide-vue-next";

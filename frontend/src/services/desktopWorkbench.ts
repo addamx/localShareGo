@@ -7,6 +7,7 @@ import type {
   ClipboardListQuery,
   ConnectivityReport,
   DesktopSettings,
+  FileTransferEvent,
   OnlineDevice,
   SyncClipboardResponse,
 } from "../types/workbench";
@@ -45,11 +46,20 @@ export const desktopWorkbench = {
   syncClipboardItem(itemId: string, targetDeviceIds: string[], syncAll: boolean) {
     return desktopApp!.SyncClipboardItem(itemId, targetDeviceIds, syncAll) as Promise<SyncClipboardResponse>;
   },
+  receiveClipboardFile(itemId: string) {
+    return desktopApp!.ReceiveClipboardFile(itemId) as Promise<ClipboardItemRecord>;
+  },
   openURL(url: string) {
     return Promise.resolve(desktopApp!.OpenURL(url));
   },
   hideDesktopApp() {
     return desktopApp!.HideDesktopApp() as Promise<void>;
+  },
+  getDesktopPinned() {
+    return desktopApp!.GetDesktopPinned() as Promise<boolean>;
+  },
+  setDesktopPinned(pinned: boolean) {
+    return desktopApp!.SetDesktopPinned(pinned) as Promise<boolean>;
   },
   getDesktopSettings() {
     return desktopApp!.GetDesktopSettings() as Promise<DesktopSettings>;
@@ -63,6 +73,10 @@ export const desktopWorkbench = {
   },
   subscribeSessionRefresh(handler: () => void) {
     const off = EventsOn("localshare://session/refresh", handler);
+    return () => off();
+  },
+  subscribeFileTransferProgress(handler: (event: FileTransferEvent) => void) {
+    const off = EventsOn("localshare://file-transfer/progress", handler);
     return () => off();
   },
 };

@@ -1,18 +1,23 @@
-import { computed, h, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useRouter } from "vue-router";
 import { useDebounceFn } from "@vueuse/core";
-import { NIcon, useMessage, type DropdownMixedOption, type DropdownOption } from "naive-ui";
+import { useMessage, type DropdownOption } from "naive-ui";
 
 import { copyText } from "../app/env";
-import { describeError, uniqueStrings } from "../app/formatters";
+import { describeError } from "../app/formatters";
 import { desktopWorkbench } from "../services/desktopWorkbench";
-import type {
-  AppBootstrap,
-  ClipboardItemRecord,
-  ConnectivityReport,
-  OnlineDevice,
-} from "../types/workbench";
-import { GlobeIcon, SettingsIcon } from "../utils/desktopIcons";
+import type { AppBootstrap, ClipboardItemRecord, ConnectivityReport, OnlineDevice } from "../types/workbench";
+import { GlobeIcon, PinIcon, PinOffIcon, SettingsIcon } from "../utils/desktopIcons";
+import {
+  isDesktopFileItem,
+  patchDesktopFileTransfer,
+} from "./useDesktopFileTransfers";
+import {
+  formatTokenCountdown,
+  resolveCandidateHosts,
+  resolvePreferredHost,
+  renderOptionIcon,
+} from "./useDesktopWorkbenchHelpers";
 
 const preferredHostStorageKey = "localsharego:web-entry-host";
 
@@ -28,7 +33,7 @@ export function useDesktopWorkbench() {
   const loading = ref(true);
   const refreshing = ref(false);
   const search = ref("");
-  const pinnedOnly = ref(false);
+  const desktopPinned = ref(false);
   const webPanelOpen = ref(false);
   const detailPanelOpen = ref(false);
   const diagnosticsModalOpen = ref(false);
@@ -60,15 +65,9 @@ export function useDesktopWorkbench() {
       return [];
     }
 
-    const baseHost = new URL(baseAccessUrl.value).hostname;
-    return uniqueStrings([baseHost, ...bootstrap.value.services.network.accessHosts]);
+    return resolveCandidateHosts(bootstrap.value);
   });
-  const activeHost = computed(() => {
-    if (selectedHost.value) {
-      return selectedHost.value;
-    }
-    return candidateHosts.value[0] ?? "";
-  });
+  const activeHost = computed(() => selectedHost.value || candidateHosts.value[0] || "");
   const resolvedSessionUrl = computed(() => {
     if (!baseAccessUrl.value) {
       return "";
@@ -92,12 +91,16 @@ export function useDesktopWorkbench() {
       key: host,
     })),
   );
-  const moreOptions = computed<DropdownMixedOption[]>(() => [
-    { label: "Web端", key: "web", renderIcon: renderOptionIcon(GlobeIcon) },
+  const moreOptions = computed<DropdownOption[]>(() => [
+    { label: "Web 入口", key: "web", renderIcon: renderOptionIcon(GlobeIcon) },
     { label: "设置", key: "settings", renderIcon: renderOptionIcon(SettingsIcon) },
+    {
+      label: desktopPinned.value ? "取消固定" : "固定窗口",
+      key: "toggleDesktopPinned",
+      renderIcon: renderOptionIcon(desktopPinned.value ? PinIcon : PinOffIcon),
+    },
     { label: "刷新", key: "refresh" },
     { label: "清空", key: "clear" },
-    { label: pinnedOnly.value ? "查看全部" : "仅看置顶", key: "togglePinned" },
   ]);
   const contextMenuOptions = computed<DropdownOption[]>(() => {
     const item = contextMenuItem.value;
@@ -107,9 +110,9 @@ export function useDesktopWorkbench() {
 
     const syncChildren: DropdownOption[] =
       onlineDevices.value.length === 0
-        ? [{ label: "No online devices", key: "sync:none", disabled: true }]
+        ? [{ label: "暂无在线设备", key: "sync:none", disabled: true }]
         : [
-            { label: "Sync to all", key: "sync:all" },
+            { label: "同步到全部", key: "sync:all" },
             ...onlineDevices.value.map((device) => ({
               label: device.name,
               key: `sync:${device.id}`,
@@ -117,10 +120,10 @@ export function useDesktopWorkbench() {
           ];
 
     return [
-      { label: item.pinned ? "Unpin" : "Pin", key: "pin" },
-      { label: "Sync", key: "sync", children: syncChildren },
-      { label: "View", key: "view" },
-      { label: "Delete", key: "delete" },
+      { label: item.pinned ? "取消置顶" : "置顶", key: "pin" },
+      { label: "同步", key: "sync", children: syncChildren },
+      { label: "查看", key: "view" },
+      { label: "删除", key: "delete" },
     ];
   });
 
@@ -134,8 +137,9 @@ export function useDesktopWorkbench() {
     }
   });
 
-  let cleanup: (() => void) | null = null;
+  let cleanupClipboard: (() => void) | null = null;
   let cleanupSession: (() => void) | null = null;
+  let cleanupFileTransfer: (() => void) | null = null;
   let clockTimer: number | null = null;
 
   onMounted(async () => {
@@ -147,11 +151,17 @@ export function useDesktopWorkbench() {
       return;
     }
 
-    cleanup = desktopWorkbench.subscribeClipboardRefresh(() => {
+    cleanupClipboard = desktopWorkbench.subscribeClipboardRefresh(() => {
       void refreshHistory(true);
     });
     cleanupSession = desktopWorkbench.subscribeSessionRefresh(() => {
       void loadBootstrap();
+    });
+    cleanupFileTransfer = desktopWorkbench.subscribeFileTransferProgress((event) => {
+      patchDesktopFileTransfer(items, event);
+      if (event.status === "received" || event.status === "failed") {
+        void refreshHistory(true);
+      }
     });
     clockTimer = window.setInterval(() => {
       clock.value = Date.now();
@@ -159,15 +169,16 @@ export function useDesktopWorkbench() {
 
     try {
       await loadBootstrap();
-      await Promise.all([refreshHistory(true), refreshOnlineDevices()]);
+      await Promise.all([refreshHistory(true), refreshOnlineDevices(), syncDesktopPinned()]);
     } finally {
       loading.value = false;
     }
   });
 
   onBeforeUnmount(() => {
-    cleanup?.();
+    cleanupClipboard?.();
     cleanupSession?.();
+    cleanupFileTransfer?.();
     if (clockTimer !== null) {
       window.clearInterval(clockTimer);
     }
@@ -179,7 +190,19 @@ export function useDesktopWorkbench() {
     try {
       const nextBootstrap = await desktopWorkbench.getBootstrapContext();
       bootstrap.value = nextBootstrap;
-      syncSelectedHost(nextBootstrap);
+      selectedHost.value = resolvePreferredHost(
+        nextBootstrap,
+        selectedHost.value,
+        window.localStorage.getItem(preferredHostStorageKey) ?? "",
+      );
+    } catch (error) {
+      message.error(describeError(error));
+    }
+  }
+
+  async function syncDesktopPinned() {
+    try {
+      desktopPinned.value = await desktopWorkbench.getDesktopPinned();
     } catch (error) {
       message.error(describeError(error));
     }
@@ -196,7 +219,7 @@ export function useDesktopWorkbench() {
     try {
       items.value = await desktopWorkbench.listClipboardItems({
         search: search.value.trim() || null,
-        pinnedOnly: pinnedOnly.value,
+        pinnedOnly: false,
         includeDeleted: false,
         limit: 80,
       });
@@ -212,7 +235,7 @@ export function useDesktopWorkbench() {
       }
 
       if (!silent) {
-        message.success("Clipboard refreshed");
+        message.success("剪贴板已刷新");
       }
     } catch (error) {
       message.error(describeError(error));
@@ -235,6 +258,10 @@ export function useDesktopWorkbench() {
 
   async function handleRowClick(item: ClipboardItemRecord) {
     selectedId.value = item.id;
+    if (isDesktopFileItem(item)) {
+      await handleFilePrimaryAction(item);
+      return;
+    }
     await handleActivate(item.id, false);
   }
 
@@ -319,7 +346,7 @@ export function useDesktopWorkbench() {
     try {
       await desktopWorkbench.activateClipboardItem(itemId);
       if (notify) {
-        message.success("Copied to system clipboard");
+        message.success("已复制到系统剪贴板");
       }
       await refreshHistory(true);
       await hideDesktopApp();
@@ -331,7 +358,7 @@ export function useDesktopWorkbench() {
   async function handlePin(item: ClipboardItemRecord) {
     try {
       await desktopWorkbench.updateClipboardItemPin(item.id, !item.pinned);
-      message.success(item.pinned ? "Unpinned" : "Pinned");
+      message.success(item.pinned ? "已取消置顶" : "已置顶");
       await refreshHistory(true);
     } catch (error) {
       message.error(describeError(error));
@@ -339,7 +366,8 @@ export function useDesktopWorkbench() {
   }
 
   async function handleDelete(item: ClipboardItemRecord) {
-    if (!window.confirm(`Delete this record?\n\n${item.preview || item.content}`)) {
+    const label = item.preview || item.content || item.fileMeta?.fileName || item.id;
+    if (!window.confirm(`删除这条记录？\n\n${label}`)) {
       return;
     }
 
@@ -349,7 +377,7 @@ export function useDesktopWorkbench() {
         detailItemId.value = null;
         detailPanelOpen.value = false;
       }
-      message.success("Record deleted");
+      message.success("记录已删除");
       await refreshHistory(true);
     } catch (error) {
       message.error(describeError(error));
@@ -360,11 +388,64 @@ export function useDesktopWorkbench() {
     try {
       const result = await desktopWorkbench.syncClipboardItem(item.id, targetDeviceIds, syncAll);
       if (result.deliveredDevices.length === 0) {
-        message.warning("No available target devices");
+        message.warning("没有可用的目标设备");
         return;
       }
-      message.success(`Synced to ${result.deliveredDevices.length} devices`);
+      message.success(`已同步到 ${result.deliveredDevices.length} 台设备`);
       await refreshOnlineDevices();
+    } catch (error) {
+      message.error(describeError(error));
+    }
+  }
+
+  async function handleFilePrimaryAction(item: ClipboardItemRecord) {
+    if (!isDesktopFileItem(item)) {
+      return;
+    }
+
+    if (item.fileMeta?.transferState === "receiving" || item.fileMeta?.transferState === "metadata_only") {
+      message.warning("文件仍在传输中");
+      return;
+    }
+
+    if (item.fileMeta?.transferState === "failed") {
+      message.warning("文件传输失败，请重新同步");
+      return;
+    }
+
+    if (item.fileMeta?.transferState === "received") {
+      await handleActivate(item.id, true);
+      return;
+    }
+
+    message.warning("文件暂时不可用");
+    return;
+  }
+
+  async function handleReceiveClipboardFile(
+    item: ClipboardItemRecord,
+    options: {
+      hideAfterReceive?: boolean;
+      openDetail?: boolean;
+      successMessage?: string;
+    } = {},
+  ) {
+    if (!isDesktopFileItem(item)) {
+      return;
+    }
+
+    try {
+      const received = await desktopWorkbench.receiveClipboardFile(item.id);
+      items.value = items.value.map((entry) => (entry.id === received.id ? received : entry));
+      if (options.openDetail !== false) {
+        detailItemId.value = received.id;
+        detailPanelOpen.value = true;
+      }
+      message.success(options.successMessage || "文件已接收");
+      await refreshHistory(true);
+      if (options.hideAfterReceive) {
+        await hideDesktopApp();
+      }
     } catch (error) {
       message.error(describeError(error));
     }
@@ -378,11 +459,11 @@ export function useDesktopWorkbench() {
   }
 
   async function handleCopyDetail() {
-    if (!detailItem.value) {
+    if (!detailItem.value || isDesktopFileItem(detailItem.value)) {
       return;
     }
     await copyText(detailItem.value.content);
-    message.success("Content copied");
+    message.success("内容已复制");
   }
 
   async function handleCopyEntry() {
@@ -390,7 +471,7 @@ export function useDesktopWorkbench() {
       return;
     }
     await copyText(resolvedSessionUrl.value);
-    message.success("Link copied");
+    message.success("链接已复制");
   }
 
   async function handleOpenEntry() {
@@ -415,7 +496,7 @@ export function useDesktopWorkbench() {
     try {
       await desktopWorkbench.rotateSessionToken();
       await loadBootstrap();
-      message.success("Session token rotated");
+      message.success("会话令牌已刷新");
     } catch (error) {
       message.error(describeError(error));
     }
@@ -446,13 +527,12 @@ export function useDesktopWorkbench() {
       await router.push("/desktop/settings");
       return;
     }
-    if (key === "refresh") {
-      await refreshHistory(false);
+    if (key === "toggleDesktopPinned") {
+      await handleDesktopPinnedToggle();
       return;
     }
-    if (key === "togglePinned") {
-      pinnedOnly.value = !pinnedOnly.value;
-      await refreshHistory(true);
+    if (key === "refresh") {
+      await refreshHistory(false);
       return;
     }
     if (key === "clear") {
@@ -460,8 +540,17 @@ export function useDesktopWorkbench() {
     }
   }
 
+  async function handleDesktopPinnedToggle() {
+    try {
+      desktopPinned.value = await desktopWorkbench.setDesktopPinned(!desktopPinned.value);
+      message.success(desktopPinned.value ? "窗口已固定" : "窗口已取消固定");
+    } catch (error) {
+      message.error(describeError(error));
+    }
+  }
+
   async function handleClearHistory() {
-    if (!window.confirm("Clear all clipboard history?")) {
+    if (!window.confirm("清空全部剪贴板历史？")) {
       return;
     }
 
@@ -469,24 +558,11 @@ export function useDesktopWorkbench() {
       await desktopWorkbench.clearClipboardHistory();
       detailItemId.value = null;
       detailPanelOpen.value = false;
-      message.success("History cleared");
+      message.success("历史已清空");
       await refreshHistory(true);
     } catch (error) {
       message.error(describeError(error));
     }
-  }
-
-  function syncSelectedHost(appBootstrap: AppBootstrap) {
-    const hosts = resolveCandidateHosts(appBootstrap);
-    const storedHost = window.localStorage.getItem(preferredHostStorageKey)?.trim() ?? "";
-    if (hosts.includes(selectedHost.value)) {
-      return;
-    }
-    if (hosts.includes(storedHost)) {
-      selectedHost.value = storedHost;
-      return;
-    }
-    selectedHost.value = hosts[0] ?? "";
   }
 
   return {
@@ -526,36 +602,4 @@ export function useDesktopWorkbench() {
     tokenCountdown,
     webPanelOpen,
   };
-}
-
-function resolveCandidateHosts(appBootstrap: AppBootstrap) {
-  const baseHost = new URL(appBootstrap.services.session.accessUrl).hostname;
-  return uniqueStrings([baseHost, ...appBootstrap.services.network.accessHosts]);
-}
-
-function formatTokenCountdown(expiresAt: number | null, now: number) {
-  if (!expiresAt) {
-    return "Pending";
-  }
-
-  const remaining = expiresAt - now;
-  if (remaining <= 0) {
-    return "Expired";
-  }
-  if (remaining > 60_000) {
-    return `${Math.max(1, Math.floor(remaining / 60_000))}m`;
-  }
-
-  return `${Math.floor(remaining / 1000)}s`;
-}
-
-function renderOptionIcon(icon: Parameters<typeof h>[0]) {
-  return () =>
-    h(
-      NIcon,
-      null,
-      {
-        default: () => h(icon),
-      },
-    );
 }

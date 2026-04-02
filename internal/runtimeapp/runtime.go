@@ -16,6 +16,7 @@ import (
 	"localShareGo/internal/auth"
 	"localShareGo/internal/clipboard"
 	"localShareGo/internal/config"
+	"localShareGo/internal/filetransfer"
 	"localShareGo/internal/httpserver"
 	"localShareGo/internal/network"
 	"localShareGo/internal/presence"
@@ -67,6 +68,7 @@ func New(ctx context.Context, assets embed.FS) (*AppRuntime, error) {
 
 	server, err := httpserver.New(
 		appConfig,
+		paths,
 		dataStore,
 		authService,
 		clipboardService,
@@ -76,6 +78,9 @@ func New(ctx context.Context, assets embed.FS) (*AppRuntime, error) {
 		onlineDevice.ID,
 		func(event clipboard.RefreshEvent) {
 			wruntime.EventsEmit(ctx, clipboard.EventName, event)
+		},
+		func(event filetransfer.ProgressEvent) {
+			wruntime.EventsEmit(ctx, "localshare://file-transfer/progress", event)
 		},
 		func() {
 			wruntime.EventsEmit(ctx, auth.EventName)

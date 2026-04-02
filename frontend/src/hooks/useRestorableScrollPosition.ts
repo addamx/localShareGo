@@ -18,7 +18,6 @@ export const useRestorableScrollPosition = <T extends ScrollElement = HTMLElemen
 
   function recordPosition() {
     scrollPosition.value = getEl()?.scrollTop ?? 0;
-    console.log('Recorded scroll position:',getEl(), scrollPosition.value);
   }
 
   function restorePosition() {

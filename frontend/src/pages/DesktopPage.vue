@@ -1,5 +1,5 @@
 <template>
-  <div class="flex h-screen flex-col overflow-hidden p-2.5 md:p-3" @click="handleSurfaceClick">
+  <div class="flex h-screen flex-col overflow-hidden" @click="handleSurfaceClick">
     <div class="h-2 shrink-0 [--wails-draggable:drag]" />
 
     <section

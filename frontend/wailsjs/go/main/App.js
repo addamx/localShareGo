@@ -30,6 +30,18 @@ export function GetConnectivityReport() {
   return window['go']['main']['App']['GetConnectivityReport']();
 }
 
+export function GetDesktopPinned() {
+  return window['go']['main']['App']['GetDesktopPinned']();
+}
+
+export function GetDesktopSettings() {
+  return window['go']['main']['App']['GetDesktopSettings']();
+}
+
+export function HideDesktopApp() {
+  return window['go']['main']['App']['HideDesktopApp']();
+}
+
 export function ListClipboardItems(arg1) {
   return window['go']['main']['App']['ListClipboardItems'](arg1);
 }
@@ -42,8 +54,20 @@ export function OpenURL(arg1) {
   return window['go']['main']['App']['OpenURL'](arg1);
 }
 
+export function ReceiveClipboardFile(arg1) {
+  return window['go']['main']['App']['ReceiveClipboardFile'](arg1);
+}
+
 export function RotateSessionToken() {
   return window['go']['main']['App']['RotateSessionToken']();
+}
+
+export function SetDesktopPinned(arg1) {
+  return window['go']['main']['App']['SetDesktopPinned'](arg1);
+}
+
+export function ShowDesktopApp() {
+  return window['go']['main']['App']['ShowDesktopApp']();
 }
 
 export function SyncClipboardItem(arg1, arg2, arg3) {
@@ -52,4 +76,8 @@ export function SyncClipboardItem(arg1, arg2, arg3) {
 
 export function UpdateClipboardItemPin(arg1, arg2) {
   return window['go']['main']['App']['UpdateClipboardItemPin'](arg1, arg2);
+}
+
+export function UpdateDesktopSettings(arg1) {
+  return window['go']['main']['App']['UpdateDesktopSettings'](arg1);
 }

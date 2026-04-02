@@ -78,6 +78,7 @@ var (
 type trayLoop struct {
 	iconBytes []byte
 	onShow    func()
+	onHotkey  func()
 	onQuit    func()
 
 	className *uint16
@@ -132,7 +133,7 @@ type trayNotifyIconData struct {
 	BalloonIcon                windows.Handle
 }
 
-func newTrayLoop(iconBytes []byte, onShow func(), onQuit func()) (*trayLoop, error) {
+func newTrayLoop(iconBytes []byte, onShow func(), onHotkey func(), onQuit func()) (*trayLoop, error) {
 	className, err := windows.UTF16PtrFromString("LocalShareGoTrayWindow")
 	if err != nil {
 		return nil, err
@@ -140,6 +141,7 @@ func newTrayLoop(iconBytes []byte, onShow func(), onQuit func()) (*trayLoop, err
 	return &trayLoop{
 		iconBytes: iconBytes,
 		onShow:    onShow,
+		onHotkey:  onHotkey,
 		onQuit:    onQuit,
 		className: className,
 		startedCh: make(chan error, 1),
@@ -211,6 +213,10 @@ func (t *trayLoop) run(initialHotkey hotkeyBinding) {
 			return
 		default:
 			_ = err
+			if msg.Message == wmHotkey {
+				go t.onHotkey()
+				continue
+			}
 			procTranslateMessage.Call(uintptr(unsafe.Pointer(&msg)))
 			procDispatchMessageW.Call(uintptr(unsafe.Pointer(&msg)))
 		}
@@ -330,7 +336,7 @@ func (t *trayLoop) initNotifyIcon() error {
 
 func (t *trayLoop) applyHotkey(binding hotkeyBinding) error {
 	if t.hotkey.Key != 0 {
-		procUnregisterHotKey.Call(uintptr(t.window), 1)
+		procUnregisterHotKey.Call(0, 1)
 		t.hotkey = hotkeyBinding{}
 	}
 
@@ -338,7 +344,7 @@ func (t *trayLoop) applyHotkey(binding hotkeyBinding) error {
 		return nil
 	}
 
-	result, _, err := procRegisterHotKey.Call(uintptr(t.window), 1, uintptr(binding.Modifiers), uintptr(binding.Key))
+	result, _, err := procRegisterHotKey.Call(0, 1, uintptr(binding.Modifiers), uintptr(binding.Key))
 	if result == 0 {
 		return fmt.Errorf("register hotkey failed: %w", err)
 	}
@@ -358,7 +364,7 @@ func (t *trayLoop) windowProc(hwnd uintptr, message uint32, wParam, lParam uintp
 		}
 		return 0
 	case wmHotkey:
-		go t.onShow()
+		go t.onHotkey()
 		return 0
 	case wmCommand:
 		switch uint32(wParam) {
@@ -417,7 +423,7 @@ func (t *trayLoop) showMenu() {
 
 func (t *trayLoop) cleanup() {
 	if t.hotkey.Key != 0 {
-		procUnregisterHotKey.Call(uintptr(t.window), 1)
+		procUnregisterHotKey.Call(0, 1)
 	}
 
 	nid := trayNotifyIconData{

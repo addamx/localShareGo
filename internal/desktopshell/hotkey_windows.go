@@ -29,6 +29,7 @@ const (
 	vkDown   = 0x28
 	vkInsert = 0x2D
 	vkDelete = 0x2E
+	vkOEM3   = 0xC0
 	vkF1     = 0x70
 	vkF24    = 0x87
 )
@@ -128,6 +129,8 @@ func resolveHotkeyKey(token string) (string, uint32, bool) {
 	}
 
 	switch token {
+	case "`", "~", "BACKQUOTE", "GRAVE", "OEM_3", "OEM3":
+		return "`", vkOEM3, true
 	case "SPACE":
 		return "Space", vkSpace, true
 	case "TAB":

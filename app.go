@@ -68,7 +68,18 @@ func (a *App) ListClipboardItems(query *store.ClipboardListQuery) ([]store.Clipb
 	if query == nil {
 		query = &store.ClipboardListQuery{Limit: 50}
 	}
-	return a.mustRuntime().Store().ListClipboardItems(*query)
+	items, err := a.mustRuntime().Store().ListClipboardItems(*query)
+	if err != nil {
+		return nil, err
+	}
+	filtered := make([]store.ClipboardItemRecord, 0, len(items))
+	for _, item := range items {
+		if item.SourceKind == "mobile_web" {
+			continue
+		}
+		filtered = append(filtered, item)
+	}
+	return filtered, nil
 }
 
 func (a *App) GetClipboardItem(itemID string) (store.ClipboardItemRecord, error) {
@@ -90,8 +101,17 @@ func (a *App) ActivateClipboardItem(itemID string) (store.ClipboardItemRecord, e
 	if item == nil {
 		return store.ClipboardItemRecord{}, apierr.NotFound(fmt.Sprintf("clipboard item `%s` not found", itemID))
 	}
-	if err := a.mustRuntime().Clipboard().WriteText(item.Content); err != nil {
-		return store.ClipboardItemRecord{}, err
+	if item.ItemKind == store.ClipboardItemKindFile {
+		if item.FileMeta == nil || item.FileMeta.LocalPath == nil {
+			return store.ClipboardItemRecord{}, apierr.State("file clipboard content is unavailable")
+		}
+		if err := a.mustRuntime().Clipboard().WriteFile(*item.FileMeta.LocalPath); err != nil {
+			return store.ClipboardItemRecord{}, err
+		}
+	} else {
+		if err := a.mustRuntime().Clipboard().WriteText(item.Content); err != nil {
+			return store.ClipboardItemRecord{}, err
+		}
 	}
 	activated, err := a.mustRuntime().Store().ReplaceClipboardItemWithCurrent(
 		itemID,
@@ -167,7 +187,27 @@ func (a *App) SyncClipboardItem(itemID string, targetDeviceIDs []string, syncAll
 		return httpserver.SyncClipboardResponse{}, apierr.NotFound(fmt.Sprintf("clipboard item `%s` not found", itemID))
 	}
 
-	return a.mustRuntime().HTTP().SyncClipboardContent(item.Content, a.mustRuntime().OnlineDeviceID(), targetDeviceIDs, syncAll)
+	return a.mustRuntime().HTTP().SyncClipboardItem(*item, a.mustRuntime().OnlineDeviceID(), targetDeviceIDs, syncAll)
+}
+
+func (a *App) ReceiveClipboardFile(itemID string) (store.ClipboardItemRecord, error) {
+	item, err := a.mustRuntime().HTTP().ReceiveClipboardFile(itemID, a.mustRuntime().Paths().DesktopReceiveDir)
+	if err != nil {
+		return store.ClipboardItemRecord{}, err
+	}
+	if item.FileMeta == nil || item.FileMeta.LocalPath == nil {
+		return store.ClipboardItemRecord{}, apierr.State("received file is unavailable")
+	}
+	if err := a.mustRuntime().Clipboard().WriteFile(*item.FileMeta.LocalPath); err != nil {
+		return store.ClipboardItemRecord{}, err
+	}
+	a.emitClipboardEvent(clipboard.RefreshEvent{
+		ItemID:       item.ID,
+		IsCurrent:    item.IsCurrent,
+		SourceKind:   item.SourceKind,
+		ObservedAtMs: nowMs(),
+	})
+	return item, nil
 }
 
 func (a *App) CopyText(text string) error {
@@ -186,6 +226,14 @@ func (a *App) HideDesktopApp() error {
 
 func (a *App) ShowDesktopApp() error {
 	return a.mustShell().Show()
+}
+
+func (a *App) GetDesktopPinned() bool {
+	return a.mustShell().IsPinned()
+}
+
+func (a *App) SetDesktopPinned(pinned bool) bool {
+	return a.mustShell().SetPinned(pinned)
 }
 
 func (a *App) GetDesktopSettings() (settings.DesktopSettings, error) {

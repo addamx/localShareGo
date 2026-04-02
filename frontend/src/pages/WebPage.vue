@@ -6,7 +6,7 @@
           LocalShareGo Web
         </h1>
         <p class="mt-[0.55rem] max-w-[34rem] text-[0.95rem] leading-[1.6] text-[var(--text-muted)]">
-          当前浏览器保存自己的剪贴板数据，发送时会按已配置设备执行同步。
+          The browser keeps its own clipboard cache and syncs it to selected devices.
         </p>
       </div>
 
@@ -19,11 +19,11 @@
     </section>
 
     <section v-if="authState === 'missing'" class="panel-surface">
-      <n-result status="warning" title="缺少 token" description="请从桌面端复制 Web 链接后再打开。" />
+      <n-result status="warning" title="Missing token" description="Copy the Web link from the desktop app and reopen it." />
     </section>
 
     <section v-else-if="authState === 'invalid'" class="panel-surface">
-      <n-result status="error" title="会话已过期" description="请从桌面端重新复制新的 Web 链接。" />
+      <n-result status="error" title="Session expired" description="Copy a fresh Web link from the desktop app." />
     </section>
 
     <template v-else>
@@ -32,24 +32,30 @@
           :draft="draft"
           :draft-bytes="draftBytes"
           :max-bytes="session?.maxTextBytes ?? 65536"
+          :pending-file-label="pendingFileLabel"
+          :pending-file-size-label="pendingFileSizeLabel"
           :sync-available="syncAvailable"
           :sync-label="composeSyncLabel"
           :sync-options="composeSyncOptions"
-          @update:draft="draft = $event"
-          @clear="draft = ''"
+          :uploading="uploading"
+          @clear="clearCompose"
+          @files-dropped="handleFilesDropped"
+          @files-pasted="handleFilesPasted"
+          @files-selected="handleFilesSelected"
           @submit="submitDraft"
           @sync-select="handleComposeSyncSelect"
+          @update:draft="draft = $event"
         />
 
         <WebClipboardPanel
           :initializing="initializing"
           :items="items"
-          :pinned-only="pinnedOnly"
+          :more-options="moreOptions"
           :search="search"
           :selected-id="selectedId"
-          @activate="activateItem"
+          @more-select="handleMoreSelect"
+          @row-click="handleRowClick"
           @row-contextmenu="openContextMenu($event.event, $event.item)"
-          @toggle-pinned="togglePinnedOnly"
           @update:search="search = $event"
         />
       </section>
@@ -57,7 +63,9 @@
 
     <n-dropdown
       trigger="manual"
+      :size="webDropdownSize"
       placement="bottom-start"
+      :theme-overrides="webDropdownThemeOverrides"
       :x="contextMenuX"
       :y="contextMenuY"
       :options="contextMenuOptions"
@@ -75,11 +83,12 @@ import { NDropdown, NIcon, NResult } from "naive-ui";
 import WebClipboardPanel from "../components/web/WebClipboardPanel.vue";
 import WebComposePanel from "../components/web/WebComposePanel.vue";
 import { useWebWorkbench } from "../hooks/useWebWorkbench";
+import { webDropdownSize, webDropdownThemeOverrides } from "../utils/dropdown";
 
 const {
-  activateItem,
   authState,
   closeContextMenu,
+  clearCompose,
   composeSyncLabel,
   composeSyncOptions,
   contextMenuOpen,
@@ -89,17 +98,24 @@ const {
   draft,
   draftBytes,
   expiresIn,
+  handleMoreSelect,
   handleComposeSyncSelect,
+  handleFilesDropped,
+  handleFilesPasted,
+  handleFilesSelected,
   handleContextSelect,
+  handleRowClick,
   initializing,
   items,
+  moreOptions,
   openContextMenu,
-  pinnedOnly,
+  pendingFileLabel,
+  pendingFileSizeLabel,
   search,
   selectedId,
   session,
   submitDraft,
   syncAvailable,
-  togglePinnedOnly,
+  uploading,
 } = useWebWorkbench();
 </script>
