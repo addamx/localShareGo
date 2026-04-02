@@ -872,7 +872,7 @@ export function useWebClipboardItems(token: ComputedRef<string>) {
     }
 
     const reader = body.getReader();
-    const chunks: Uint8Array[] = [];
+    const chunks: BlobPart[] = [];
     const total = Number(response.headers.get("Content-Length") ?? item.fileMeta?.sizeBytes ?? 0);
     let transferred = 0;
 
@@ -884,7 +884,9 @@ export function useWebClipboardItems(token: ComputedRef<string>) {
       if (!value) {
         continue;
       }
-      chunks.push(value);
+      const chunk = new Uint8Array(value.byteLength);
+      chunk.set(value);
+      chunks.push(chunk);
       transferred += value.byteLength;
       markFileTransfer(item.id, "receiving", clampPercent(progressPercent(transferred, total)), null);
     }
