@@ -102,15 +102,57 @@ export interface HealthResponse {
 
 export interface SessionResponse {
   deviceName: string;
+  selfDeviceId: string;
   accessUrl: string;
+  sessionId: string;
+  sessionKind: string;
+  sessionStatus: string;
   expiresAt: number;
+  tokenTtlMinutes: number;
+  rotationEnabled: boolean;
   maxTextBytes: number;
+}
+
+export interface EntryActivationResponse {
+  session: SessionResponse;
+  credential: string;
 }
 
 export interface OnlineDevice {
   id: string;
   name: string;
   kind: string;
+}
+
+export interface LinkedWebDevice {
+  id: string;
+  name: string;
+  lastKnownIp: string;
+  lastSeenAt: number;
+  online: boolean;
+  expiresAt: number;
+}
+
+export interface PairRequestSummary {
+  id: string;
+  deviceId: string;
+  deviceName: string;
+  status: string;
+  createdAt: number;
+  updatedAt: number;
+  expiresAt: number;
+}
+
+export interface PairRequestStatus {
+  id: string;
+  deviceId: string;
+  deviceName: string;
+  status: string;
+  accessUrl: string;
+  credential: string;
+  createdAt: number;
+  updatedAt: number;
+  expiresAt: number;
 }
 
 export interface DevicePresenceResponse {
@@ -153,12 +195,19 @@ export interface FileTransferEvent {
   errorMessage: string | null;
 }
 
+export interface RevokedEvent {
+  deviceId: string;
+  sessionId: string;
+  reason: string;
+}
+
 export interface ServerEvent {
   kind: string;
   scope: string;
   itemId: string | null;
   sync: SyncClipboardEvent | null;
   fileTransfer: FileTransferEvent | null;
+  revoked: RevokedEvent | null;
   ts: number;
 }
 

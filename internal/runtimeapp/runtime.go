@@ -54,7 +54,7 @@ func New(ctx context.Context, assets embed.FS) (*AppRuntime, error) {
 		return nil, err
 	}
 	presenceRegistry := presence.New(45 * time.Second)
-	onlineDevice := presenceRegistry.Register(networkService.DeviceName(), presence.KindDesktop)
+	onlineDevice := presenceRegistry.RegisterWithID(device.ID, networkService.DeviceName(), presence.KindDesktop, "")
 
 	authService := auth.New(dataStore, appConfig.TokenTTLMinutes)
 	if _, _, err := authService.EnsureSession(nowMs()); err != nil {

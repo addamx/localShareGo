@@ -6,24 +6,42 @@
           LocalShareGo Web
         </h1>
         <p class="mt-[0.55rem] max-w-[34rem] text-[0.95rem] leading-[1.6] text-[var(--text-muted)]">
-          The browser keeps its own clipboard cache and syncs it to selected devices.
+          浏览器会保留自己的剪贴板缓存，并与选中的设备同步。
         </p>
       </div>
 
       <div
+        v-if="authState === 'ready'"
         class="inline-flex items-center gap-[0.45rem] whitespace-nowrap rounded-full border border-[rgba(20,33,27,0.12)] bg-[rgba(255,252,247,0.84)] px-[0.8rem] py-[0.55rem] text-[var(--text-main)]"
       >
         <n-icon size="16"><Clock3 class="h-4 w-4" /></n-icon>
-        <span>{{ expiresIn }}</span>
+        <span>设备关联剩余 {{ expiresIn }}</span>
+        <n-button v-if="renewAvailable" size="tiny" secondary @click="void renewDeviceAssociation()">延期</n-button>
       </div>
     </section>
 
-    <section v-if="authState === 'missing'" class="panel-surface">
-      <n-result status="warning" title="Missing token" description="Copy the Web link from the desktop app and reopen it." />
+    <section v-if="authState === 'no-link'" class="panel-surface">
+      <n-result status="warning" title="无可用关联" description="当前浏览器还没有可用的设备关联。">
+        <template #footer>
+          <n-button type="primary" @click="void requestDeviceAssociation()">申请关联</n-button>
+        </template>
+      </n-result>
     </section>
 
-    <section v-else-if="authState === 'invalid'" class="panel-surface">
-      <n-result status="error" title="Session expired" description="Copy a fresh Web link from the desktop app." />
+    <section v-else-if="authState === 'expired'" class="panel-surface">
+      <n-result status="error" title="关联已失效" description="当前浏览器的设备关联已经失效。">
+        <template #footer>
+          <n-button type="primary" @click="void requestDeviceAssociation()">申请关联</n-button>
+        </template>
+      </n-result>
+    </section>
+
+    <section v-else-if="authState === 'requesting' || authState === 'waiting-approval'" class="panel-surface">
+      <n-result
+        status="info"
+        title="等待桌面端确认"
+        description="已发起设备关联申请，请到桌面端确认是否允许关联。"
+      />
     </section>
 
     <template v-else>
@@ -78,7 +96,7 @@
 
 <script setup lang="ts">
 import { Clock3 } from "lucide-vue-next";
-import { NDropdown, NIcon, NResult } from "naive-ui";
+import { NButton, NDropdown, NIcon, NResult } from "naive-ui";
 
 import WebClipboardPanel from "../components/web/WebClipboardPanel.vue";
 import WebComposePanel from "../components/web/WebComposePanel.vue";
@@ -111,6 +129,9 @@ const {
   openContextMenu,
   pendingFileLabel,
   pendingFileSizeLabel,
+  renewAvailable,
+  renewDeviceAssociation,
+  requestDeviceAssociation,
   search,
   selectedId,
   session,

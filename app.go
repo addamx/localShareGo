@@ -49,6 +49,12 @@ func (a *App) startup(ctx context.Context) {
 		panic(err)
 	}
 	a.shell = shell
+	a.runtime.HTTP().SetPairRequestHandler(func(request auth.PairRequestSummary) {
+		if a.shell != nil {
+			_ = a.shell.Show()
+		}
+		wruntime.EventsEmit(a.ctx, auth.PairRequestEventName, request)
+	})
 }
 
 func (a *App) shutdown(context.Context) {
@@ -176,6 +182,26 @@ func (a *App) GetConnectivityReport() (runtimeapp.ConnectivityReport, error) {
 
 func (a *App) ListOnlineDevices() []httpserver.OnlineDevice {
 	return a.mustRuntime().HTTP().ListOnlineDevices(a.mustRuntime().OnlineDeviceID())
+}
+
+func (a *App) ListLinkedWebDevices() ([]auth.LinkedDeviceSummary, error) {
+	return a.mustRuntime().HTTP().ListLinkedDevices()
+}
+
+func (a *App) RemoveLinkedWebDevice(deviceID string) error {
+	return a.mustRuntime().HTTP().RemoveLinkedDevice(deviceID)
+}
+
+func (a *App) ListPairRequests() []auth.PairRequestSummary {
+	return a.mustRuntime().HTTP().ListPairRequests()
+}
+
+func (a *App) ApprovePairRequest(requestID string) (auth.PairRequestSummary, error) {
+	return a.mustRuntime().HTTP().ApprovePairRequest(requestID)
+}
+
+func (a *App) RejectPairRequest(requestID string) (auth.PairRequestSummary, error) {
+	return a.mustRuntime().HTTP().RejectPairRequest(requestID)
 }
 
 func (a *App) SyncClipboardItem(itemID string, targetDeviceIDs []string, syncAll bool) (httpserver.SyncClipboardResponse, error) {

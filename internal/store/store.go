@@ -71,6 +71,12 @@ func (s *Store) load() error {
 	if err := json.Unmarshal(content, &next); err != nil {
 		return err
 	}
+	for index := range next.Devices {
+		normalizeDeviceRecord(&next.Devices[index])
+	}
+	for index := range next.Sessions {
+		normalizeSessionRecord(&next.Sessions[index])
+	}
 	for index := range next.ClipboardItems {
 		normalizeClipboardItemRecord(&next.ClipboardItems[index])
 	}
@@ -108,7 +114,7 @@ func (s *Store) UpsertDevice(name string) (DeviceRecord, error) {
 
 	now := nowMs()
 	for index, item := range s.data.Devices {
-		if item.Name == trimmed {
+		if item.Kind == DeviceKindDesktop && item.Name == trimmed {
 			item.UpdatedAt = now
 			s.data.Devices[index] = item
 			return item, s.saveLocked()
@@ -117,6 +123,7 @@ func (s *Store) UpsertDevice(name string) (DeviceRecord, error) {
 
 	device := DeviceRecord{
 		ID:        uuid.NewString(),
+		Kind:      DeviceKindDesktop,
 		Name:      trimmed,
 		CreatedAt: now,
 		UpdatedAt: now,
@@ -159,9 +166,10 @@ func (s *Store) CreateSession(tokenHash string, expiresAt int64) (SessionRecord,
 
 	session := SessionRecord{
 		ID:        uuid.NewString(),
+		Kind:      SessionKindDevice,
 		TokenHash: tokenHash,
 		ExpiresAt: expiresAt,
-		Status:    "active",
+		Status:    SessionStatusActive,
 		CreatedAt: now,
 	}
 	s.data.Sessions = append(s.data.Sessions, session)
@@ -178,19 +186,20 @@ func (s *Store) ReplacePendingSession(tokenHash string, createdAt int64) (Sessio
 
 	expireSessionsLocked(&s.data.Sessions, createdAt)
 	for index, item := range s.data.Sessions {
-		if item.Status != "pending" {
+		if item.Kind != SessionKindEntry || item.Status != SessionStatusPending {
 			continue
 		}
-		item.Status = "rotated"
+		item.Status = SessionStatusRotated
 		item.RotatedAt = &createdAt
 		s.data.Sessions[index] = item
 	}
 
 	session := SessionRecord{
 		ID:        uuid.NewString(),
+		Kind:      SessionKindEntry,
 		TokenHash: tokenHash,
 		ExpiresAt: 0,
-		Status:    "pending",
+		Status:    SessionStatusPending,
 		CreatedAt: createdAt,
 	}
 	s.data.Sessions = append(s.data.Sessions, session)

@@ -24,6 +24,19 @@ const (
 	TransferStateReceiving    = "receiving"
 	TransferStateReceived     = "received"
 	TransferStateFailed       = "failed"
+
+	SessionKindEntry  = "entry"
+	SessionKindDevice = "device"
+
+	SessionStatusPending  = "pending"
+	SessionStatusActive   = "active"
+	SessionStatusExpired  = "expired"
+	SessionStatusRevoked  = "revoked"
+	SessionStatusRotated  = "rotated"
+	SessionStatusConsumed = "consumed"
+
+	DeviceKindDesktop = "desktop"
+	DeviceKindWeb     = "web"
 )
 
 type ClipboardFileMeta struct {
@@ -100,20 +113,30 @@ type UpdateClipboardTransferInput struct {
 }
 
 type SessionRecord struct {
-	ID          string `json:"id"`
-	TokenHash   string `json:"tokenHash"`
-	ExpiresAt   int64  `json:"expiresAt"`
-	Status      string `json:"status"`
-	CreatedAt   int64  `json:"createdAt"`
-	ActivatedAt *int64 `json:"activatedAt"`
-	RotatedAt   *int64 `json:"rotatedAt"`
+	ID          string  `json:"id"`
+	Kind        string  `json:"kind"`
+	TokenHash   string  `json:"tokenHash"`
+	DeviceID    *string `json:"deviceId"`
+	DeviceName  *string `json:"deviceName"`
+	LastKnownIP *string `json:"lastKnownIp"`
+	ExpiresAt   int64   `json:"expiresAt"`
+	Status      string  `json:"status"`
+	CreatedAt   int64   `json:"createdAt"`
+	ActivatedAt *int64  `json:"activatedAt"`
+	RotatedAt   *int64  `json:"rotatedAt"`
+	RevokedAt   *int64  `json:"revokedAt"`
 }
 
 type DeviceRecord struct {
-	ID        string `json:"id"`
-	Name      string `json:"name"`
-	CreatedAt int64  `json:"createdAt"`
-	UpdatedAt int64  `json:"updatedAt"`
+	ID          string  `json:"id"`
+	Kind        string  `json:"kind"`
+	Name        string  `json:"name"`
+	LastKnownIP *string `json:"lastKnownIp"`
+	LastSeenAt  *int64  `json:"lastSeenAt"`
+	LinkedAt    *int64  `json:"linkedAt"`
+	RevokedAt   *int64  `json:"revokedAt"`
+	CreatedAt   int64   `json:"createdAt"`
+	UpdatedAt   int64   `json:"updatedAt"`
 }
 
 type persistentState struct {

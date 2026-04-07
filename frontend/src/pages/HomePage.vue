@@ -4,12 +4,11 @@
       <p class="eyebrow">Route Gateway</p>
       <h1>LocalShareGo</h1>
       <p class="lead">
-        NaiveDesktop 现在使用 <strong>/desktop</strong> 路由，Web 入口使用
+        NaiveDesktop 现在使用 <strong>/desktop</strong> 路由，Web 关联页使用
         <strong>/web</strong> 路由。
       </p>
       <p class="muted-copy">
-        浏览器请从 NaiveDesktop 生成的访问链接进入，通常形式为
-        <code>/web?token=...</code>。
+        浏览器首次进入时，请使用桌面端生成的关联入口；关联成功后，浏览器会优先复用本地设备关联。
       </p>
     </section>
   </div>

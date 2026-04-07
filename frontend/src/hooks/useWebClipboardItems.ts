@@ -1,16 +1,18 @@
-import { computed, onBeforeUnmount, ref, watch, type ComputedRef } from "vue";
+import { computed, onBeforeUnmount, ref, watch } from "vue";
+import { useRoute, useRouter } from "vue-router";
 import localforage from "localforage";
 import UAParser from "ua-parser-js";
 import { useMessage, type DropdownOption } from "naive-ui";
 
 import { copyText } from "../app/env";
-import { createWorkbenchApiClient, WorkbenchApiError, type WorkbenchApiClient } from "../services/workbenchApi";
+import { anonymousWorkbenchApi, createWorkbenchApiClient, WorkbenchApiError, type WorkbenchApiClient } from "../services/workbenchApi";
 import type {
   ClipboardFileMeta,
   ClipboardItemRecord,
   ClipboardTransferState,
   FileTransferEvent,
   OnlineDevice,
+  PairRequestStatus,
   ServerEvent,
   SessionResponse,
 } from "../types/workbench";
@@ -29,13 +31,16 @@ const fileForge = localforage.createInstance({
 });
 
 const webClipboardStorageKey = "localsharego:web:clipboard-items";
+const webCredentialStorageKey = "localsharego:web:device-credential";
 const webDeviceIDStorageKey = "localsharego:web:device-id";
 
-export function useWebClipboardItems(token: ComputedRef<string>) {
+export function useWebClipboardItems() {
+  const route = useRoute();
+  const router = useRouter();
   const message = useMessage();
 
   const initializing = ref(true);
-  const authState = ref<"idle" | "missing" | "valid" | "invalid">("idle");
+  const authState = ref<"idle" | "no-link" | "expired" | "requesting" | "waiting-approval" | "ready">("idle");
   const search = ref("");
   const selectedId = ref<string | null>(null);
   const session = ref<SessionResponse | null>(null);
@@ -47,8 +52,14 @@ export function useWebClipboardItems(token: ComputedRef<string>) {
   const contextMenuX = ref(0);
   const contextMenuY = ref(0);
   const contextMenuItem = ref<ClipboardItemRecord | null>(null);
+  const activeCredential = ref("");
+  const pendingPairRequestID = ref("");
 
   const storedItems = useForgeStorage<ClipboardItemRecord[]>(webClipboardStorageKey, [], forgeOptions);
+  const routeToken = computed(() => {
+    const value = route.query.token;
+    return typeof value === "string" ? value.trim() : "";
+  });
 
   const items = computed(() => {
     const keyword = search.value.trim().toLowerCase();
@@ -70,6 +81,13 @@ export function useWebClipboardItems(token: ComputedRef<string>) {
   });
 
   const expiresIn = computed(() => formatCountdown(session.value?.expiresAt ?? null, clock.value));
+  const renewAvailable = computed(() => {
+    if (!session.value?.expiresAt) {
+      return false;
+    }
+    const remaining = session.value.expiresAt - clock.value;
+    return remaining > 0 && remaining <= session.value.tokenTtlMinutes * 60_000 / 2;
+  });
   const moreOptions = computed<DropdownOption[]>(() => [
     { label: "Refresh", key: "refresh" },
     { label: "Clear", key: "clear" },
@@ -101,6 +119,7 @@ export function useWebClipboardItems(token: ComputedRef<string>) {
   let eventSource: EventSource | null = null;
   let heartbeatTimer: number | null = null;
   let clockTimer: number | null = null;
+  let pairRequestTimer: number | null = null;
   const activeFileTransfers = new Map<string, Promise<ClipboardItemRecord | null>>();
 
   void storedItems.then(() => {
@@ -108,8 +127,11 @@ export function useWebClipboardItems(token: ComputedRef<string>) {
   });
 
   watch(
-    token,
+    routeToken,
     () => {
+      if (routeToken.value === activeCredential.value && authState.value === "ready" && api.value) {
+        return;
+      }
       void initializePage();
     },
     { immediate: true },
@@ -119,12 +141,14 @@ export function useWebClipboardItems(token: ComputedRef<string>) {
     closeContextMenu();
     stopHeartbeat();
     stopClock();
+    stopPairRequestPolling();
     closeEvents();
   });
 
   async function initializePage() {
     stopHeartbeat();
     stopClock();
+    stopPairRequestPolling();
     closeEvents();
     closeContextMenu();
 
@@ -134,29 +158,94 @@ export function useWebClipboardItems(token: ComputedRef<string>) {
     api.value = null;
     localDevice.value = null;
     onlineDevices.value = [];
+    activeCredential.value = "";
 
-    if (!token.value) {
-      authState.value = "missing";
+    const urlToken = routeToken.value;
+    if (urlToken) {
+      const activatedCredential = await tryActivateEntry(urlToken);
+      if (activatedCredential) {
+        if (await initializeAuthorizedSession(activatedCredential, true)) {
+          await replaceCredentialInUrl(activatedCredential);
+          initializing.value = false;
+          return;
+        }
+
+        clearCredential();
+        await replaceCredentialInUrl(null);
+        authState.value = "expired";
+        initializing.value = false;
+        return;
+      }
+
+      if (await initializeAuthorizedSession(urlToken, true)) {
+        initializing.value = false;
+        return;
+      }
+
+      clearCredential();
+      await replaceCredentialInUrl(null);
+      authState.value = "expired";
       initializing.value = false;
       return;
     }
 
-    api.value = createWorkbenchApiClient(window.location.origin, token.value);
+    const storedCredential = readStoredCredential();
+    if (!storedCredential) {
+      authState.value = "no-link";
+      initializing.value = false;
+      return;
+    }
+
+    if (await initializeAuthorizedSession(storedCredential, true)) {
+      await replaceCredentialInUrl(storedCredential);
+      initializing.value = false;
+      return;
+    }
+
+    clearCredential();
+    authState.value = "expired";
+    initializing.value = false;
+  }
+
+  async function tryActivateEntry(entryToken: string) {
+    try {
+      const response = await anonymousWorkbenchApi.activateEntry(
+        window.location.origin,
+        entryToken,
+        getOrCreateLocalDeviceID(),
+        buildWebDeviceName(),
+      );
+      return response.credential.trim();
+    } catch (error) {
+      if (error instanceof WorkbenchApiError && (error.status === 400 || error.status === 401 || error.status === 404)) {
+        return "";
+      }
+      message.error(describeError(error));
+      return "";
+    }
+  }
+
+  async function initializeAuthorizedSession(credential: string, persist: boolean) {
+    api.value = createWorkbenchApiClient(window.location.origin, credential);
 
     try {
-      await api.value.health();
       session.value = await api.value.session();
+      if (persist) {
+        persistCredential(credential);
+      }
+      activeCredential.value = credential;
+      if (!(await initializePresence())) {
+        return false;
+      }
       startClock();
-      authState.value = "valid";
-      await initializePresence();
+      authState.value = "ready";
+      return true;
     } catch (error) {
       if (error instanceof WorkbenchApiError && error.status === 401) {
-        authState.value = "invalid";
-      } else {
-        message.error(describeError(error));
+        return false;
       }
-    } finally {
-      initializing.value = false;
+      message.error(describeError(error));
+      return false;
     }
   }
 
@@ -165,22 +254,23 @@ export function useWebClipboardItems(token: ComputedRef<string>) {
       await registerDevice();
       connectEvents();
       startHeartbeat();
+      return true;
     } catch (error) {
       if (error instanceof WorkbenchApiError && error.status === 401) {
-        authState.value = "invalid";
-        stopClock();
-        return;
+        expireAssociation();
+        return false;
       }
       message.error(describeError(error));
+      return true;
     }
   }
 
   async function registerDevice() {
-    if (!api.value) {
+    if (!api.value || !session.value) {
       return;
     }
 
-    const deviceID = getOrCreateLocalDeviceID();
+    const deviceID = session.value.selfDeviceId || getOrCreateLocalDeviceID();
     const response = await api.value.registerWebDevice(buildWebDeviceName(), deviceID);
     localDevice.value = response.self;
     persistLocalDeviceID(response.self.id);
@@ -206,10 +296,7 @@ export function useWebClipboardItems(token: ComputedRef<string>) {
         return;
       }
       if (error instanceof WorkbenchApiError && error.status === 401) {
-        authState.value = "invalid";
-        stopHeartbeat();
-        stopClock();
-        closeEvents();
+        expireAssociation();
         return;
       }
       message.error(describeError(error));
@@ -251,10 +338,7 @@ export function useWebClipboardItems(token: ComputedRef<string>) {
       return true;
     } catch (error) {
       if (error instanceof WorkbenchApiError && error.status === 401) {
-        authState.value = "invalid";
-        stopHeartbeat();
-        stopClock();
-        closeEvents();
+        expireAssociation();
         return false;
       }
       message.error(describeError(error));
@@ -291,10 +375,7 @@ export function useWebClipboardItems(token: ComputedRef<string>) {
       return synced;
     } catch (error) {
       if (error instanceof WorkbenchApiError && error.status === 401) {
-        authState.value = "invalid";
-        stopHeartbeat();
-        stopClock();
-        closeEvents();
+        expireAssociation();
         return false;
       }
       message.error(describeError(error));
@@ -415,10 +496,7 @@ export function useWebClipboardItems(token: ComputedRef<string>) {
       return true;
     } catch (error) {
       if (error instanceof WorkbenchApiError && error.status === 401) {
-        authState.value = "invalid";
-        stopHeartbeat();
-        stopClock();
-        closeEvents();
+        expireAssociation();
         return false;
       }
       message.error(describeError(error));
@@ -441,10 +519,7 @@ export function useWebClipboardItems(token: ComputedRef<string>) {
     } catch (error) {
       markFileTransfer(item.id, "failed", 0, describeError(error));
       if (error instanceof WorkbenchApiError && error.status === 401) {
-        authState.value = "invalid";
-        stopHeartbeat();
-        stopClock();
-        closeEvents();
+        expireAssociation();
         return false;
       }
       message.error(describeError(error));
@@ -552,6 +627,13 @@ export function useWebClipboardItems(token: ComputedRef<string>) {
       }
       queuePendingFileTransfers();
     });
+    eventSource.addEventListener("revoked", (event) => {
+      const payload = JSON.parse((event as MessageEvent).data) as ServerEvent;
+      if (!payload.revoked || !session.value || payload.revoked.sessionId !== session.value.sessionId) {
+        return;
+      }
+      expireAssociation();
+    });
   }
 
   function closeEvents() {
@@ -576,7 +658,11 @@ export function useWebClipboardItems(token: ComputedRef<string>) {
   function startClock() {
     stopClock();
     clockTimer = window.setInterval(() => {
-      clock.value = Date.now();
+      const now = Date.now();
+      clock.value = now;
+      if (session.value?.expiresAt && now >= session.value.expiresAt) {
+        expireAssociation();
+      }
     }, 1000);
   }
 
@@ -585,6 +671,36 @@ export function useWebClipboardItems(token: ComputedRef<string>) {
       window.clearInterval(clockTimer);
       clockTimer = null;
     }
+  }
+
+  function startPairRequestPolling() {
+    stopPairRequestPolling();
+    pairRequestTimer = window.setInterval(() => {
+      void pollPairRequestStatus();
+    }, 2_000);
+  }
+
+  function stopPairRequestPolling() {
+    if (pairRequestTimer !== null) {
+      window.clearInterval(pairRequestTimer);
+      pairRequestTimer = null;
+    }
+  }
+
+  function expireAssociation() {
+    clearCredential();
+    stopHeartbeat();
+    stopClock();
+    stopPairRequestPolling();
+    closeEvents();
+    api.value = null;
+    localDevice.value = null;
+    onlineDevices.value = [];
+    session.value = null;
+    activeCredential.value = "";
+    pendingPairRequestID.value = "";
+    authState.value = "expired";
+    void replaceCredentialInUrl(null);
   }
 
   function hydrateOwnItems() {
@@ -793,6 +909,114 @@ export function useWebClipboardItems(token: ComputedRef<string>) {
     message.success("History cleared");
   }
 
+  async function requestDeviceAssociation() {
+    pendingPairRequestID.value = "";
+    authState.value = "requesting";
+    try {
+      const response = await anonymousWorkbenchApi.createPairRequest(
+        window.location.origin,
+        getOrCreateLocalDeviceID(),
+        buildWebDeviceName(),
+      );
+      pendingPairRequestID.value = response.request.id;
+      authState.value = "waiting-approval";
+      startPairRequestPolling();
+    } catch (error) {
+      pendingPairRequestID.value = "";
+      authState.value = "expired";
+      message.error(describeError(error));
+    }
+  }
+
+  async function pollPairRequestStatus() {
+    if (!pendingPairRequestID.value) {
+      return;
+    }
+
+    try {
+      const response = await anonymousWorkbenchApi.getPairRequest(window.location.origin, pendingPairRequestID.value);
+      const request = response.request;
+      if (request.status === "pending") {
+        return;
+      }
+
+      stopPairRequestPolling();
+      pendingPairRequestID.value = "";
+      await handlePairRequestResolution(request);
+    } catch (error) {
+      stopPairRequestPolling();
+      pendingPairRequestID.value = "";
+      authState.value = "expired";
+      message.error(describeError(error));
+    }
+  }
+
+  async function handlePairRequestResolution(request: PairRequestStatus) {
+    if (request.status === "approved" && request.credential.trim()) {
+      if (await initializeAuthorizedSession(request.credential, true)) {
+        await replaceCredentialInUrl(request.credential);
+        return;
+      }
+    }
+
+    clearCredential();
+    pendingPairRequestID.value = "";
+    authState.value = "expired";
+    await replaceCredentialInUrl(null);
+  }
+
+  async function renewDeviceAssociation() {
+    if (!api.value) {
+      return false;
+    }
+
+    try {
+      session.value = await api.value.renewSession();
+      startClock();
+      message.success("设备关联已延期");
+      return true;
+    } catch (error) {
+      if (error instanceof WorkbenchApiError && error.status === 401) {
+        expireAssociation();
+        return false;
+      }
+      message.error(describeError(error));
+      return false;
+    }
+  }
+
+  async function replaceCredentialInUrl(token: string | null) {
+    const nextQuery = { ...route.query };
+    const current = typeof nextQuery.token === "string" ? nextQuery.token.trim() : "";
+    if (token) {
+      if (current === token) {
+        return;
+      }
+      nextQuery.token = token;
+    } else {
+      if (!current) {
+        return;
+      }
+      delete nextQuery.token;
+    }
+    await router.replace({
+      path: route.path,
+      query: nextQuery,
+    });
+  }
+
+  function persistCredential(token: string) {
+    window.localStorage.setItem(webCredentialStorageKey, token.trim());
+  }
+
+  function readStoredCredential() {
+    return window.localStorage.getItem(webCredentialStorageKey)?.trim() ?? "";
+  }
+
+  function clearCredential() {
+    window.localStorage.removeItem(webCredentialStorageKey);
+  }
+
   function triggerFileDownload(url: string, fileName: string) {
     const anchor = document.createElement("a");
     anchor.href = url;
@@ -944,6 +1168,9 @@ export function useWebClipboardItems(token: ComputedRef<string>) {
     onlineDevices,
     openContextMenu,
     refreshPresence,
+    renewAvailable,
+    renewDeviceAssociation,
+    requestDeviceAssociation,
     search,
     selectedId,
     session,

@@ -21,6 +21,7 @@ type Device struct {
 	Kind         string `json:"kind"`
 	RegisteredAt int64  `json:"registeredAt"`
 	LastSeenAt   int64  `json:"lastSeenAt"`
+	LastKnownIP  string `json:"lastKnownIp"`
 }
 
 type Registry struct {
@@ -36,11 +37,11 @@ func New(ttl time.Duration) *Registry {
 	}
 }
 
-func (r *Registry) Register(name, kind string) Device {
-	return r.RegisterWithID("", name, kind)
+func (r *Registry) Register(name, kind, lastKnownIP string) Device {
+	return r.RegisterWithID("", name, kind, lastKnownIP)
 }
 
-func (r *Registry) RegisterWithID(deviceID, name, kind string) Device {
+func (r *Registry) RegisterWithID(deviceID, name, kind, lastKnownIP string) Device {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
@@ -58,6 +59,7 @@ func (r *Registry) RegisterWithID(deviceID, name, kind string) Device {
 			device.Name = r.resolveUniqueNameLocked(baseName, trimmedID)
 			device.Kind = strings.TrimSpace(kind)
 			device.LastSeenAt = now
+			device.LastKnownIP = strings.TrimSpace(lastKnownIP)
 			r.devices[trimmedID] = device
 			return device
 		}
@@ -73,12 +75,13 @@ func (r *Registry) RegisterWithID(deviceID, name, kind string) Device {
 		Kind:         strings.TrimSpace(kind),
 		RegisteredAt: now,
 		LastSeenAt:   now,
+		LastKnownIP:  strings.TrimSpace(lastKnownIP),
 	}
 	r.devices[device.ID] = device
 	return device
 }
 
-func (r *Registry) Touch(deviceID string) (Device, bool) {
+func (r *Registry) Touch(deviceID, lastKnownIP string) (Device, bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
@@ -90,6 +93,9 @@ func (r *Registry) Touch(deviceID string) (Device, bool) {
 	}
 
 	device.LastSeenAt = nowMs()
+	if trimmedIP := strings.TrimSpace(lastKnownIP); trimmedIP != "" {
+		device.LastKnownIP = trimmedIP
+	}
 	r.devices[deviceID] = device
 	return device, true
 }
@@ -138,6 +144,12 @@ func (r *Registry) List(excludeIDs ...string) []Device {
 	})
 
 	return items
+}
+
+func (r *Registry) Remove(deviceID string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	delete(r.devices, strings.TrimSpace(deviceID))
 }
 
 func (r *Registry) resolveUniqueNameLocked(baseName, exceptID string) string {

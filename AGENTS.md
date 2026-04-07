@@ -59,7 +59,7 @@
 # FRONTEND
 - 样式优先使用 Tailwind，其次 SCSS
 - 浏览器storage使用localForage
-- 优先flex，必要时grid
+- 优先flex，而非grid，除非是明显的二维布局
 - Desktop 不考虑响应式；Web 端考虑响应式，满足桌面端和手机端
 
 # UI

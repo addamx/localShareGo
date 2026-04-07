@@ -9,6 +9,11 @@ interface DesktopAppApi {
   RotateSessionToken(): Promise<any>;
   GetConnectivityReport(): Promise<any>;
   ListOnlineDevices(): Promise<any[]>;
+  ListLinkedWebDevices(): Promise<any[]>;
+  RemoveLinkedWebDevice(deviceId: string): Promise<void>;
+  ListPairRequests(): Promise<any[]>;
+  ApprovePairRequest(requestId: string): Promise<any>;
+  RejectPairRequest(requestId: string): Promise<any>;
   SyncClipboardItem(itemId: string, targetDeviceIds: string[], syncAll: boolean): Promise<any>;
   ReceiveClipboardFile(itemId: string): Promise<any>;
   CopyText(text: string): Promise<void>;

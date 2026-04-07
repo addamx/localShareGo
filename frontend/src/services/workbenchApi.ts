@@ -5,7 +5,10 @@ import type {
   ClipboardListResponse,
   ClipboardWriteResponse,
   DevicePresenceResponse,
+  EntryActivationResponse,
   HealthResponse,
+  PairRequestStatus,
+  PairRequestSummary,
   SessionResponse,
   SyncClipboardRequest,
   SyncClipboardResponse,
@@ -23,6 +26,28 @@ export class WorkbenchApiError extends Error {
   }
 }
 
+async function requestEnvelope<T>(input: URL | string, init: RequestInit = {}) {
+  const headers = new Headers(init.headers);
+  headers.set("Accept", "application/json");
+  if (init.body && !(init.body instanceof FormData) && !headers.has("Content-Type")) {
+    headers.set("Content-Type", "application/json");
+  }
+
+  const response = await fetch(input, {
+    ...init,
+    headers,
+  });
+  const payload = (await response.json()) as ApiEnvelope<T>;
+  if (!response.ok || !payload.ok || !payload.data) {
+    throw new WorkbenchApiError(
+      payload.error?.code ?? "HTTP_ERROR",
+      payload.error?.message ?? `HTTP ${response.status}`,
+      response.status,
+    );
+  }
+  return payload.data;
+}
+
 export function createWorkbenchApiClient(origin: string, token: string) {
   const withToken = (path: string) => {
     const url = new URL(path, origin);
@@ -30,30 +55,12 @@ export function createWorkbenchApiClient(origin: string, token: string) {
     return url;
   };
 
-  const request = async <T,>(path: string, init: RequestInit = {}): Promise<T> => {
-    const headers = new Headers(init.headers);
-    headers.set("Accept", "application/json");
-    if (init.body && !(init.body instanceof FormData) && !headers.has("Content-Type")) {
-      headers.set("Content-Type", "application/json");
-    }
-    const response = await fetch(withToken(path), {
-      ...init,
-      headers,
-    });
-    const payload = (await response.json()) as ApiEnvelope<T>;
-    if (!response.ok || !payload.ok || !payload.data) {
-      throw new WorkbenchApiError(
-        payload.error?.code ?? "HTTP_ERROR",
-        payload.error?.message ?? `HTTP ${response.status}`,
-        response.status,
-      );
-    }
-    return payload.data;
-  };
+  const request = <T,>(path: string, init: RequestInit = {}) => requestEnvelope<T>(withToken(path), init);
 
   return {
     health: () => request<HealthResponse>("/api/v1/health"),
     session: () => request<SessionResponse>("/api/v1/session"),
+    renewSession: () => request<SessionResponse>("/api/v1/session/renew", { method: "POST" }),
     registerWebDevice: (name: string, deviceId: string) =>
       request<DevicePresenceResponse>("/api/v1/devices/register", {
         method: "POST",
@@ -111,5 +118,25 @@ export function createWorkbenchApiClient(origin: string, token: string) {
     eventsUrl: () => withToken("/api/v1/events").toString(),
   };
 }
+
+export const anonymousWorkbenchApi = {
+  activateEntry(origin: string, token: string, deviceId: string, deviceName: string) {
+    return requestEnvelope<EntryActivationResponse>(new URL("/api/v1/session/activate-entry", origin), {
+      method: "POST",
+      body: JSON.stringify({ token, deviceId, deviceName }),
+    });
+  },
+  createPairRequest(origin: string, deviceId: string, deviceName: string) {
+    return requestEnvelope<{ request: PairRequestSummary }>(new URL("/api/v1/pair-requests", origin), {
+      method: "POST",
+      body: JSON.stringify({ deviceId, deviceName }),
+    });
+  },
+  getPairRequest(origin: string, requestId: string) {
+    return requestEnvelope<{ request: PairRequestStatus }>(
+      new URL(`/api/v1/pair-requests/${encodeURIComponent(requestId)}`, origin),
+    );
+  },
+};
 
 export type WorkbenchApiClient = ReturnType<typeof createWorkbenchApiClient>;

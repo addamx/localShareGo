@@ -34,11 +34,13 @@
       :active-host="activeHost"
       :bind-address="bindAddress"
       :candidate-options="candidateOptions"
+      :linked-devices="linkedDevices"
       :resolved-session-url="resolvedSessionUrl"
       :token-countdown="tokenCountdown"
       @copy="handleCopyEntry"
       @diagnostics="openDiagnostics"
       @open="handleOpenEntry"
+      @remove-device="handleRemoveLinkedDevice"
       @refresh="handleRefreshSession"
       @select-host="handleCandidateSelect"
     />
@@ -57,6 +59,13 @@
       :loading="diagnosticsLoading"
       :resolved-session-url="resolvedSessionUrl"
       :server-state="bootstrap?.services.httpServer.state"
+    />
+
+    <DesktopPairRequestModal
+      v-model:show="pairRequestModalOpen"
+      :request="activePairRequest"
+      @approve="handleApprovePairRequest"
+      @reject="handleRejectPairRequest"
     />
 
     <n-dropdown
@@ -79,6 +88,7 @@ import { NDropdown } from "naive-ui";
 import DesktopClipboardList from "../components/desktop/DesktopClipboardList.vue";
 import DesktopDetailDrawer from "../components/desktop/DesktopDetailDrawer.vue";
 import DesktopDiagnosticsModal from "../components/desktop/DesktopDiagnosticsModal.vue";
+import DesktopPairRequestModal from "../components/desktop/DesktopPairRequestModal.vue";
 import DesktopWebDrawer from "../components/desktop/DesktopWebDrawer.vue";
 import { useRestorableScrollPosition } from "../hooks/useRestorableScrollPosition";
 import { useDesktopWorkbench } from "../hooks/useDesktopWorkbench";
@@ -95,24 +105,30 @@ const {
   contextMenuOptions,
   contextMenuX,
   contextMenuY,
+  activePairRequest,
   detailItem,
   detailPanelOpen,
   diagnosticsLoading,
   diagnosticsModalOpen,
   handleCandidateSelect,
+  handleApprovePairRequest,
   handleContextSelect,
   handleCopyDetail,
   handleCopyEntry,
   handleDeleteDetail,
   handleMoreSelect,
   handleOpenEntry,
+  handleRejectPairRequest,
+  handleRemoveLinkedDevice,
   handleRefreshSession,
   handleRowClick,
   items,
+  linkedDevices,
   loading,
   moreOptions,
   openContextMenu,
   openDiagnostics,
+  pairRequestModalOpen,
   refreshing,
   resolvedSessionUrl,
   search,

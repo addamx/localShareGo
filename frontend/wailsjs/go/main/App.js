@@ -6,6 +6,10 @@ export function ActivateClipboardItem(arg1) {
   return window['go']['main']['App']['ActivateClipboardItem'](arg1);
 }
 
+export function ApprovePairRequest(arg1) {
+  return window['go']['main']['App']['ApprovePairRequest'](arg1);
+}
+
 export function ClearClipboardHistory() {
   return window['go']['main']['App']['ClearClipboardHistory']();
 }
@@ -46,8 +50,16 @@ export function ListClipboardItems(arg1) {
   return window['go']['main']['App']['ListClipboardItems'](arg1);
 }
 
+export function ListLinkedWebDevices() {
+  return window['go']['main']['App']['ListLinkedWebDevices']();
+}
+
 export function ListOnlineDevices() {
   return window['go']['main']['App']['ListOnlineDevices']();
+}
+
+export function ListPairRequests() {
+  return window['go']['main']['App']['ListPairRequests']();
 }
 
 export function OpenURL(arg1) {
@@ -56,6 +68,14 @@ export function OpenURL(arg1) {
 
 export function ReceiveClipboardFile(arg1) {
   return window['go']['main']['App']['ReceiveClipboardFile'](arg1);
+}
+
+export function RejectPairRequest(arg1) {
+  return window['go']['main']['App']['RejectPairRequest'](arg1);
+}
+
+export function RemoveLinkedWebDevice(arg1) {
+  return window['go']['main']['App']['RemoveLinkedWebDevice'](arg1);
 }
 
 export function RotateSessionToken() {

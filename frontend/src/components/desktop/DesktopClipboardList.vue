@@ -1,6 +1,6 @@
 <template>
   <section class="panel-surface flex min-h-0 flex-col px-0.5">
-    <div class="flex items-center gap-[0.55rem] border-b border-[rgba(20,33,27,0.08)] pb-[0.65rem]">
+    <div class="flex items-center gap-[0.55rem] border-b border-[rgba(20,33,27,0.08)] py-[0.2rem]">
       <n-input
         :value="search"
         clearable
@@ -69,9 +69,6 @@
               <div class="grid min-w-0 flex-1 gap-[0.3rem]">
                 <div class="flex items-start justify-between gap-3">
                   <div class="min-w-0">
-                    <p class="m-0 truncate text-[0.95rem] font-semibold text-[var(--text-main)]">
-                      {{ item.fileMeta?.fileName || item.preview || "Untitled file" }}
-                    </p>
                     <div class="mt-[0.14rem] flex flex-wrap items-center gap-[0.45rem] text-[0.77rem] text-[var(--text-muted)]">
                       <span>{{ formatSource(item.sourceKind) }}</span>
                       <span>{{ formatDateTime(item.createdAt) }}</span>

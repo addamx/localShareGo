@@ -1,7 +1,7 @@
 <template>
   <n-config-provider :theme-overrides="themeOverrides">
     <n-dialog-provider>
-      <n-message-provider placement="top-right" :max="4">
+      <n-message-provider placement="bottom-right" :max="4">
         <router-view />
       </n-message-provider>
     </n-dialog-provider>

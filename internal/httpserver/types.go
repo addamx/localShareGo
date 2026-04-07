@@ -2,6 +2,7 @@ package httpserver
 
 import (
 	"localShareGo/internal/apierr"
+	"localShareGo/internal/auth"
 	"localShareGo/internal/store"
 )
 
@@ -31,6 +32,7 @@ type HealthResponse struct {
 
 type SessionResponse struct {
 	DeviceName       string `json:"deviceName"`
+	SelfDeviceID     string `json:"selfDeviceId"`
 	PublicHost       string `json:"publicHost"`
 	PublicPort       int    `json:"publicPort"`
 	AccessURL        string `json:"accessUrl"`
@@ -38,6 +40,7 @@ type SessionResponse struct {
 	SSEEndpoint      string `json:"sseEndpoint"`
 	WebBasePath      string `json:"webBasePath"`
 	SessionID        string `json:"sessionId"`
+	SessionKind      string `json:"sessionKind"`
 	SessionStatus    string `json:"sessionStatus"`
 	ExpiresAt        int64  `json:"expiresAt"`
 	TokenTTLMinutes  int    `json:"tokenTtlMinutes"`
@@ -68,6 +71,34 @@ type DevicePresenceResponse struct {
 	Devices []OnlineDevice `json:"devices"`
 }
 
+type EntryActivationRequest struct {
+	Token      string `json:"token"`
+	DeviceID   string `json:"deviceId"`
+	DeviceName string `json:"deviceName"`
+}
+
+type EntryActivationResponse struct {
+	Session    SessionResponse `json:"session"`
+	Credential string          `json:"credential"`
+}
+
+type PairRequestCreateRequest struct {
+	DeviceID   string `json:"deviceId"`
+	DeviceName string `json:"deviceName"`
+}
+
+type PairRequestStatusResponse struct {
+	Request auth.PairRequestStatus `json:"request"`
+}
+
+type PairRequestCreateResponse struct {
+	Request auth.PairRequestSummary `json:"request"`
+}
+
+type LinkedDeviceListResponse struct {
+	Devices []auth.LinkedDeviceSummary `json:"devices"`
+}
+
 type SyncClipboardRequest struct {
 	ItemID          *string  `json:"itemId"`
 	Content         string   `json:"content"`
@@ -96,12 +127,19 @@ type FileTransferEvent struct {
 	ErrorMessage     *string `json:"errorMessage"`
 }
 
+type RevokedEvent struct {
+	DeviceID  string `json:"deviceId"`
+	SessionID string `json:"sessionId"`
+	Reason    string `json:"reason"`
+}
+
 type ServerEvent struct {
 	Kind         string              `json:"kind"`
 	Scope        string              `json:"scope"`
 	ItemID       *string             `json:"itemId"`
 	Sync         *SyncClipboardEvent `json:"sync"`
 	FileTransfer *FileTransferEvent  `json:"fileTransfer"`
+	Revoked      *RevokedEvent       `json:"revoked"`
 	TS           int64               `json:"ts"`
 }
 

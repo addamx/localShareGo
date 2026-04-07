@@ -8,7 +8,9 @@ import type {
   ConnectivityReport,
   DesktopSettings,
   FileTransferEvent,
+  LinkedWebDevice,
   OnlineDevice,
+  PairRequestSummary,
   SyncClipboardResponse,
 } from "../types/workbench";
 
@@ -43,6 +45,21 @@ export const desktopWorkbench = {
   listOnlineDevices() {
     return desktopApp!.ListOnlineDevices() as Promise<OnlineDevice[]>;
   },
+  listLinkedWebDevices() {
+    return desktopApp!.ListLinkedWebDevices() as Promise<LinkedWebDevice[]>;
+  },
+  removeLinkedWebDevice(deviceId: string) {
+    return desktopApp!.RemoveLinkedWebDevice(deviceId) as Promise<void>;
+  },
+  listPairRequests() {
+    return desktopApp!.ListPairRequests() as Promise<PairRequestSummary[]>;
+  },
+  approvePairRequest(requestId: string) {
+    return desktopApp!.ApprovePairRequest(requestId) as Promise<PairRequestSummary>;
+  },
+  rejectPairRequest(requestId: string) {
+    return desktopApp!.RejectPairRequest(requestId) as Promise<PairRequestSummary>;
+  },
   syncClipboardItem(itemId: string, targetDeviceIds: string[], syncAll: boolean) {
     return desktopApp!.SyncClipboardItem(itemId, targetDeviceIds, syncAll) as Promise<SyncClipboardResponse>;
   },
@@ -54,6 +71,9 @@ export const desktopWorkbench = {
   },
   hideDesktopApp() {
     return desktopApp!.HideDesktopApp() as Promise<void>;
+  },
+  showDesktopApp() {
+    return desktopApp!.ShowDesktopApp() as Promise<void>;
   },
   getDesktopPinned() {
     return desktopApp!.GetDesktopPinned() as Promise<boolean>;
@@ -77,6 +97,10 @@ export const desktopWorkbench = {
   },
   subscribeFileTransferProgress(handler: (event: FileTransferEvent) => void) {
     const off = EventsOn("localshare://file-transfer/progress", handler);
+    return () => off();
+  },
+  subscribePairRequest(handler: (event: PairRequestSummary) => void) {
+    const off = EventsOn("localshare://pair-request/pending", handler);
     return () => off();
   },
 };

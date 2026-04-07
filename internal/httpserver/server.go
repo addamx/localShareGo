@@ -30,23 +30,31 @@ import (
 type EventBroker struct {
 	mu     sync.RWMutex
 	nextID int
-	subs   map[int]chan ServerEvent
+	subs   map[int]eventSubscription
+}
+
+type eventSubscription struct {
+	deviceID string
+	ch       chan ServerEvent
 }
 
 func newEventBroker() *EventBroker {
 	return &EventBroker{
-		subs: make(map[int]chan ServerEvent),
+		subs: make(map[int]eventSubscription),
 	}
 }
 
-func (b *EventBroker) subscribe() (int, <-chan ServerEvent) {
+func (b *EventBroker) subscribe(deviceID string) (int, <-chan ServerEvent) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
 	id := b.nextID
 	b.nextID++
 	ch := make(chan ServerEvent, 16)
-	b.subs[id] = ch
+	b.subs[id] = eventSubscription{
+		deviceID: strings.TrimSpace(deviceID),
+		ch:       ch,
+	}
 	return id, ch
 }
 
@@ -54,9 +62,9 @@ func (b *EventBroker) unsubscribe(id int) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
-	if ch, ok := b.subs[id]; ok {
+	if sub, ok := b.subs[id]; ok {
 		delete(b.subs, id)
-		close(ch)
+		close(sub.ch)
 	}
 }
 
@@ -64,9 +72,29 @@ func (b *EventBroker) publish(event ServerEvent) {
 	b.mu.RLock()
 	defer b.mu.RUnlock()
 
-	for _, ch := range b.subs {
+	for _, sub := range b.subs {
 		select {
-		case ch <- event:
+		case sub.ch <- event:
+		default:
+		}
+	}
+}
+
+func (b *EventBroker) publishToDevice(deviceID string, event ServerEvent) {
+	trimmedID := strings.TrimSpace(deviceID)
+	if trimmedID == "" {
+		return
+	}
+
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+
+	for _, sub := range b.subs {
+		if sub.deviceID != trimmedID {
+			continue
+		}
+		select {
+		case sub.ch <- event:
 		default:
 		}
 	}
@@ -88,6 +116,7 @@ type HTTPServer struct {
 	onClipboardRefresh func(clipboard.RefreshEvent)
 	onFileTransfer     func(filetransfer.ProgressEvent)
 	onSessionRefresh   func()
+	onPairRequest      func(auth.PairRequestSummary)
 	mu                 sync.RWMutex
 	effectivePort      *int
 	state              string
@@ -138,6 +167,12 @@ func New(appConfig config.RuntimeConfig, paths config.AppPaths, dataStore *store
 	server.fileTransfer = fileTransfer
 
 	return server, nil
+}
+
+func (s *HTTPServer) SetPairRequestHandler(handler func(auth.PairRequestSummary)) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.onPairRequest = handler
 }
 
 func (s *HTTPServer) Status() HttpServerStatus {
@@ -263,7 +298,11 @@ func (s *HTTPServer) routes() http.Handler {
 
 	mux.HandleFunc("/api/v1/health", s.handleHealth)
 	mux.HandleFunc("/api/v1/session", s.handleSession)
+	mux.HandleFunc("/api/v1/session/activate-entry", s.handleActivateEntry)
+	mux.HandleFunc("/api/v1/session/renew", s.handleRenewSession)
 	mux.HandleFunc("/api/v1/session/rotate-token", s.handleRotateToken)
+	mux.HandleFunc("/api/v1/pair-requests", s.handlePairRequests)
+	mux.HandleFunc("/api/v1/pair-requests/", s.handlePairRequest)
 	mux.HandleFunc("/api/v1/devices/register", s.handleRegisterDevice)
 	mux.HandleFunc("/api/v1/devices/heartbeat", s.handleHeartbeatDevice)
 	mux.HandleFunc("/api/v1/file-items", s.handleFileItemCollection)
@@ -272,6 +311,7 @@ func (s *HTTPServer) routes() http.Handler {
 	mux.HandleFunc("/api/v1/clipboard-items/clear", s.handleClearClipboardHistory)
 	mux.HandleFunc("/api/v1/clipboard-items/", s.handleClipboardItem)
 	mux.HandleFunc("/api/v1/clipboard-sync", s.handleSyncClipboard)
+	mux.HandleFunc("/api/v1/web-devices/", s.handleWebDevice)
 	mux.HandleFunc("/api/v1/events", s.handleEvents)
 	return mux
 }
@@ -389,19 +429,63 @@ func (s *HTTPServer) handleSession(writer http.ResponseWriter, request *http.Req
 	}
 
 	token := extractToken(request)
-	session, activated, err := s.auth.ValidateToken(token, nowMs())
+	session, err := s.auth.ValidateDeviceToken(token, nowMs())
 	if err != nil {
 		writeAPIError(writer, err)
 		return
 	}
-	if activated {
-		s.PublishRefresh("session", nil)
-		if s.onSessionRefresh != nil {
-			s.onSessionRefresh()
-		}
+
+	writeAPIResponse(writer, http.StatusOK, s.buildSessionResponse(session, token))
+}
+
+func (s *HTTPServer) handleActivateEntry(writer http.ResponseWriter, request *http.Request) {
+	if request.Method != http.MethodPost {
+		writer.WriteHeader(http.StatusMethodNotAllowed)
+		return
 	}
 
-	writeAPIResponse(writer, http.StatusOK, s.buildSessionResponse(session))
+	var payload EntryActivationRequest
+	if err := json.NewDecoder(request.Body).Decode(&payload); err != nil {
+		writeAPIError(writer, apierr.InvalidArgument("invalid request body"))
+		return
+	}
+
+	session, credential, err := s.auth.ActivateEntry(
+		payload.Token,
+		payload.DeviceID,
+		payload.DeviceName,
+		remoteIP(request),
+		nowMs(),
+	)
+	if err != nil {
+		writeAPIError(writer, err)
+		return
+	}
+
+	s.PublishRefresh("session", nil)
+	if s.onSessionRefresh != nil {
+		s.onSessionRefresh()
+	}
+	writeAPIResponse(writer, http.StatusOK, EntryActivationResponse{
+		Session:    s.buildSessionResponse(session, credential),
+		Credential: credential,
+	})
+}
+
+func (s *HTTPServer) handleRenewSession(writer http.ResponseWriter, request *http.Request) {
+	if request.Method != http.MethodPost {
+		writer.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+
+	token := extractToken(request)
+	session, err := s.auth.RenewDeviceSession(token, nowMs())
+	if err != nil {
+		writeAPIError(writer, err)
+		return
+	}
+
+	writeAPIResponse(writer, http.StatusOK, s.buildSessionResponse(session, token))
 }
 
 func (s *HTTPServer) handleRotateToken(writer http.ResponseWriter, request *http.Request) {
@@ -425,7 +509,7 @@ func (s *HTTPServer) handleRotateToken(writer http.ResponseWriter, request *http
 	if s.onSessionRefresh != nil {
 		s.onSessionRefresh()
 	}
-	writeAPIResponse(writer, http.StatusOK, s.buildSessionResponse(session))
+	writeAPIResponse(writer, http.StatusOK, s.buildEntrySessionResponse(session))
 }
 
 func (s *HTTPServer) handleRegisterDevice(writer http.ResponseWriter, request *http.Request) {
@@ -433,7 +517,8 @@ func (s *HTTPServer) handleRegisterDevice(writer http.ResponseWriter, request *h
 		writer.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
-	if _, err := s.authorizeRequest(request); err != nil {
+	session, _, err := s.authorizeDeviceRequest(request)
+	if err != nil {
 		writeAPIError(writer, err)
 		return
 	}
@@ -444,7 +529,21 @@ func (s *HTTPServer) handleRegisterDevice(writer http.ResponseWriter, request *h
 		return
 	}
 
-	device := s.presence.RegisterWithID(payload.DeviceID, payload.Name, presence.KindWeb)
+	deviceID := session.DeviceID
+	deviceName := payload.Name
+	if session.DeviceName != nil && strings.TrimSpace(*session.DeviceName) != "" {
+		deviceName = strings.TrimSpace(*session.DeviceName)
+	}
+	ip := remoteIP(request)
+	if _, err := s.auth.UpdateDeviceSessionIP(session.ID, ip, nowMs()); err != nil {
+		writeAPIError(writer, err)
+		return
+	}
+	if _, err := s.store.UpsertLinkedWebDevice(deviceIDValue(deviceID), deviceName, ip, nowMs()); err != nil {
+		writeAPIError(writer, err)
+		return
+	}
+	device := s.presence.RegisterWithID(deviceIDValue(deviceID), deviceName, presence.KindWeb, ip)
 	writeAPIResponse(writer, http.StatusOK, DevicePresenceResponse{
 		Self:    s.buildOnlineDevice(device),
 		Devices: s.listOnlineDevices(device.ID),
@@ -456,7 +555,8 @@ func (s *HTTPServer) handleHeartbeatDevice(writer http.ResponseWriter, request *
 		writer.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
-	if _, err := s.authorizeRequest(request); err != nil {
+	session, _, err := s.authorizeDeviceRequest(request)
+	if err != nil {
 		writeAPIError(writer, err)
 		return
 	}
@@ -467,7 +567,17 @@ func (s *HTTPServer) handleHeartbeatDevice(writer http.ResponseWriter, request *
 		return
 	}
 
-	device, ok := s.presence.Touch(payload.DeviceID)
+	deviceID := deviceIDValue(session.DeviceID)
+	ip := remoteIP(request)
+	if _, err := s.auth.UpdateDeviceSessionIP(session.ID, ip, nowMs()); err != nil {
+		writeAPIError(writer, err)
+		return
+	}
+	if _, err := s.store.TouchLinkedWebDevice(deviceID, ip, nowMs()); err != nil {
+		writeAPIError(writer, err)
+		return
+	}
+	device, ok := s.presence.Touch(deviceID, ip)
 	if !ok {
 		writeAPIError(writer, apierr.NotFound("device is offline"))
 		return
@@ -477,6 +587,74 @@ func (s *HTTPServer) handleHeartbeatDevice(writer http.ResponseWriter, request *
 		Self:    s.buildOnlineDevice(device),
 		Devices: s.listOnlineDevices(device.ID),
 	})
+}
+
+func (s *HTTPServer) handlePairRequests(writer http.ResponseWriter, request *http.Request) {
+	switch request.Method {
+	case http.MethodPost:
+		var payload PairRequestCreateRequest
+		if err := json.NewDecoder(request.Body).Decode(&payload); err != nil {
+			writeAPIError(writer, apierr.InvalidArgument("invalid request body"))
+			return
+		}
+
+		pairRequest, err := s.auth.CreatePairRequest(payload.DeviceID, payload.DeviceName, nowMs())
+		if err != nil {
+			writeAPIError(writer, err)
+			return
+		}
+		if s.onPairRequest != nil {
+			s.onPairRequest(pairRequest)
+		}
+		writeAPIResponse(writer, http.StatusOK, PairRequestCreateResponse{Request: pairRequest})
+	default:
+		writer.WriteHeader(http.StatusMethodNotAllowed)
+	}
+}
+
+func (s *HTTPServer) handlePairRequest(writer http.ResponseWriter, request *http.Request) {
+	requestID := strings.TrimPrefix(request.URL.Path, "/api/v1/pair-requests/")
+	requestID = strings.TrimSpace(strings.Trim(path.Clean("/"+requestID), "/"))
+	if requestID == "" {
+		http.NotFound(writer, request)
+		return
+	}
+
+	switch request.Method {
+	case http.MethodGet:
+		status, err := s.auth.GetPairRequestStatus(requestID, nowMs())
+		if err != nil {
+			writeAPIError(writer, err)
+			return
+		}
+		writeAPIResponse(writer, http.StatusOK, PairRequestStatusResponse{Request: status})
+	default:
+		writer.WriteHeader(http.StatusMethodNotAllowed)
+	}
+}
+
+func (s *HTTPServer) handleWebDevice(writer http.ResponseWriter, request *http.Request) {
+	if request.Method != http.MethodDelete {
+		writer.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	if _, err := s.authorizeRequest(request); err != nil {
+		writeAPIError(writer, err)
+		return
+	}
+
+	deviceID := strings.TrimPrefix(request.URL.Path, "/api/v1/web-devices/")
+	deviceID = strings.TrimSpace(strings.Trim(path.Clean("/"+deviceID), "/"))
+	if deviceID == "" {
+		http.NotFound(writer, request)
+		return
+	}
+
+	if err := s.RemoveLinkedDevice(deviceID); err != nil {
+		writeAPIError(writer, err)
+		return
+	}
+	writeAPIResponse(writer, http.StatusOK, map[string]string{"deviceId": deviceID})
 }
 
 func (s *HTTPServer) handleClipboardCollection(writer http.ResponseWriter, request *http.Request) {
@@ -706,7 +884,8 @@ func (s *HTTPServer) handleSyncClipboard(writer http.ResponseWriter, request *ht
 		writer.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
-	if _, err := s.authorizeRequest(request); err != nil {
+	session, _, err := s.authorizeDeviceRequest(request)
+	if err != nil {
 		writeAPIError(writer, err)
 		return
 	}
@@ -718,21 +897,20 @@ func (s *HTTPServer) handleSyncClipboard(writer http.ResponseWriter, request *ht
 	}
 
 	var result SyncClipboardResponse
-	var err error
+	deviceID := deviceIDValue(session.DeviceID)
 	if payload.ItemID != nil && strings.TrimSpace(*payload.ItemID) != "" {
 		item, itemErr := s.store.GetClipboardItem(strings.TrimSpace(*payload.ItemID))
-		err = itemErr
-		if err != nil {
-			writeAPIError(writer, err)
+		if itemErr != nil {
+			writeAPIError(writer, itemErr)
 			return
 		}
 		if item == nil {
 			writeAPIError(writer, apierr.NotFound(fmt.Sprintf("clipboard item `%s` not found", strings.TrimSpace(*payload.ItemID))))
 			return
 		}
-		result, err = s.SyncClipboardItem(*item, payload.SourceDeviceID, payload.TargetDeviceIDs, payload.SyncAll)
+		result, err = s.SyncClipboardItem(*item, deviceID, payload.TargetDeviceIDs, payload.SyncAll)
 	} else {
-		result, err = s.SyncClipboardContent(payload.Content, payload.SourceDeviceID, payload.TargetDeviceIDs, payload.SyncAll)
+		result, err = s.SyncClipboardContent(payload.Content, deviceID, payload.TargetDeviceIDs, payload.SyncAll)
 	}
 	if err != nil {
 		writeAPIError(writer, err)
@@ -896,7 +1074,8 @@ func (s *HTTPServer) handleEvents(writer http.ResponseWriter, request *http.Requ
 		writer.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
-	if _, err := s.authorizeRequest(request); err != nil {
+	session, _, err := s.authorizeDeviceRequest(request)
+	if err != nil {
 		writeAPIError(writer, err)
 		return
 	}
@@ -911,7 +1090,7 @@ func (s *HTTPServer) handleEvents(writer http.ResponseWriter, request *http.Requ
 	writer.Header().Set("Cache-Control", "no-cache")
 	writer.Header().Set("Connection", "keep-alive")
 
-	id, ch := s.broker.subscribe()
+	id, ch := s.broker.subscribe(deviceIDValue(session.DeviceID))
 	defer s.broker.unsubscribe(id)
 
 	_, _ = io.WriteString(writer, "event: ready\ndata: connected\n\n")
@@ -942,6 +1121,53 @@ func (s *HTTPServer) ListOnlineDevices(excludeIDs ...string) []OnlineDevice {
 	return s.listOnlineDevices(excludeIDs...)
 }
 
+func (s *HTTPServer) ListLinkedDevices() ([]auth.LinkedDeviceSummary, error) {
+	items, err := s.auth.ListLinkedDevices(nowMs())
+	if err != nil {
+		return nil, err
+	}
+	for index := range items {
+		if _, ok := s.presence.Get(items[index].ID); ok {
+			items[index].Online = true
+		}
+	}
+	return items, nil
+}
+
+func (s *HTTPServer) ListPairRequests() []auth.PairRequestSummary {
+	return s.auth.ListPairRequests(nowMs())
+}
+
+func (s *HTTPServer) ApprovePairRequest(requestID string) (auth.PairRequestSummary, error) {
+	status := s.Status()
+	port := status.PreferredPort
+	if status.EffectivePort != nil {
+		port = *status.EffectivePort
+	}
+	summary, err := s.auth.ApprovePairRequest(requestID, s.network.AccessHost(), port, s.config.WebRoute, nowMs())
+	if err != nil {
+		return auth.PairRequestSummary{}, err
+	}
+	s.PublishRefresh("session", nil)
+	return summary, nil
+}
+
+func (s *HTTPServer) RejectPairRequest(requestID string) (auth.PairRequestSummary, error) {
+	return s.auth.RejectPairRequest(requestID, nowMs())
+}
+
+func (s *HTTPServer) RemoveLinkedDevice(deviceID string) error {
+	revoked, err := s.auth.RevokeDevice(deviceID, nowMs())
+	if err != nil {
+		return err
+	}
+	s.presence.Remove(deviceID)
+	for _, session := range revoked {
+		s.PublishRevokedDevice(deviceID, session.ID, "removed")
+	}
+	return nil
+}
+
 func (s *HTTPServer) ReceiveClipboardFile(itemID, targetDir string) (store.ClipboardItemRecord, error) {
 	item, err := s.fileTransfer.ReceiveToDirectory(s.store, itemID, targetDir)
 	if err != nil {
@@ -954,7 +1180,7 @@ func (s *HTTPServer) ReceiveClipboardFile(itemID, targetDir string) (store.Clipb
 func (s *HTTPServer) SyncClipboardItem(item store.ClipboardItemRecord, sourceDeviceID string, targetDeviceIDs []string, syncAll bool) (SyncClipboardResponse, error) {
 	sourceName := "Unknown Device"
 	if sourceDeviceID != "" {
-		source, ok := s.presence.Touch(sourceDeviceID)
+		source, ok := s.presence.Touch(sourceDeviceID, "")
 		if ok {
 			sourceName = source.Name
 		}
@@ -983,7 +1209,7 @@ func (s *HTTPServer) SyncClipboardItem(item store.ClipboardItemRecord, sourceDev
 				CharCount:      item.CharCount,
 				FileMeta:       cloneFileMetaForDesktopTarget(item.FileMeta),
 				SourceKind:     sourceName,
-				SourceDeviceID: nil,
+				SourceDeviceID: stringPointer(sourceDeviceID),
 				Pinned:         item.Pinned,
 				MarkCurrent:    false,
 			}, s.config.ClipboardPollInterval, s.config.MaxTextBytes)
@@ -1018,7 +1244,7 @@ func (s *HTTPServer) SyncClipboardItem(item store.ClipboardItemRecord, sourceDev
 			Scope: "clipboard",
 			Sync: &SyncClipboardEvent{
 				TargetDeviceIDs: webTargetIDs,
-				Item:            sanitizeClipboardItemForSync(item, sourceName, nil),
+				Item:            sanitizeClipboardItemForSync(item, sourceName, stringPointer(sourceDeviceID)),
 				CreatedAt:       nowMs(),
 			},
 			TS: nowMs(),
@@ -1046,8 +1272,14 @@ func (s *HTTPServer) SyncClipboardContent(content, sourceDeviceID string, target
 }
 
 func (s *HTTPServer) authorizeRequest(request *http.Request) (store.SessionRecord, error) {
-	session, _, err := s.auth.ValidateToken(extractToken(request), nowMs())
+	session, err := s.auth.ValidateDeviceToken(extractToken(request), nowMs())
 	return session, err
+}
+
+func (s *HTTPServer) authorizeDeviceRequest(request *http.Request) (store.SessionRecord, string, error) {
+	token := extractToken(request)
+	session, err := s.auth.ValidateDeviceToken(token, nowMs())
+	return session, token, err
 }
 
 func (s *HTTPServer) listOnlineDevices(excludeIDs ...string) []OnlineDevice {
@@ -1093,21 +1325,27 @@ func (s *HTTPServer) resolveSyncTargets(sourceDeviceID string, targetDeviceIDs [
 	return targets
 }
 
-func (s *HTTPServer) buildSessionResponse(session store.SessionRecord) SessionResponse {
+func (s *HTTPServer) buildEntrySessionResponse(session store.SessionRecord) SessionResponse {
+	return s.buildSessionResponse(session, s.auth.CurrentEntryToken())
+}
+
+func (s *HTTPServer) buildSessionResponse(session store.SessionRecord, token string) SessionResponse {
 	status := s.Status()
 	port := status.PreferredPort
 	if status.EffectivePort != nil {
 		port = *status.EffectivePort
 	}
 	return SessionResponse{
-		DeviceName:       s.network.DeviceName(),
+		DeviceName:       strings.TrimSpace(optionalString(session.DeviceName, s.network.DeviceName())),
+		SelfDeviceID:     deviceIDValue(session.DeviceID),
 		PublicHost:       s.network.AccessHost(),
 		PublicPort:       port,
-		AccessURL:        auth.BuildAccessURL(s.network.AccessHost(), port, s.config.WebRoute, s.auth.CurrentToken()),
+		AccessURL:        auth.BuildAccessURL(s.network.AccessHost(), port, s.config.WebRoute, strings.TrimSpace(token)),
 		HealthEndpoint:   "/api/v1/health",
 		SSEEndpoint:      "/api/v1/events",
 		WebBasePath:      auth.NormalizeWebBasePath(s.config.WebRoute),
 		SessionID:        session.ID,
+		SessionKind:      session.Kind,
 		SessionStatus:    session.Status,
 		ExpiresAt:        session.ExpiresAt,
 		TokenTTLMinutes:  s.config.TokenTTLMinutes,
@@ -1117,6 +1355,19 @@ func (s *HTTPServer) buildSessionResponse(session store.SessionRecord) SessionRe
 		MaxTextBytes:     s.config.MaxTextBytes,
 		ReadOnly:         false,
 	}
+}
+
+func (s *HTTPServer) PublishRevokedDevice(deviceID, sessionID, reason string) {
+	s.broker.publishToDevice(deviceID, ServerEvent{
+		Kind:  "revoked",
+		Scope: "session",
+		Revoked: &RevokedEvent{
+			DeviceID:  deviceID,
+			SessionID: sessionID,
+			Reason:    reason,
+		},
+		TS: nowMs(),
+	})
 }
 
 func extractToken(request *http.Request) string {
@@ -1164,6 +1415,43 @@ func cloneStringPointer(value *string) *string {
 	}
 	copy := *value
 	return &copy
+}
+
+func stringPointer(value string) *string {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return nil
+	}
+	return &trimmed
+}
+
+func deviceIDValue(value *string) string {
+	if value == nil {
+		return ""
+	}
+	return strings.TrimSpace(*value)
+}
+
+func optionalString(value *string, fallback string) string {
+	if value == nil {
+		return strings.TrimSpace(fallback)
+	}
+	trimmed := strings.TrimSpace(*value)
+	if trimmed == "" {
+		return strings.TrimSpace(fallback)
+	}
+	return trimmed
+}
+
+func remoteIP(request *http.Request) string {
+	if request == nil {
+		return ""
+	}
+	host, _, err := net.SplitHostPort(strings.TrimSpace(request.RemoteAddr))
+	if err == nil {
+		return strings.TrimSpace(host)
+	}
+	return strings.TrimSpace(request.RemoteAddr)
 }
 
 func cloneFileMetaForDesktopTarget(meta *store.ClipboardFileMeta) *store.ClipboardFileMeta {

@@ -196,10 +196,7 @@ func (t *trayLoop) run(initialHotkey hotkeyBinding) {
 		t.startedCh <- err
 		return
 	}
-	if err := t.applyHotkey(initialHotkey); err != nil {
-		t.startedCh <- err
-		return
-	}
+	_ = t.applyHotkey(initialHotkey)
 
 	t.startedCh <- nil
 

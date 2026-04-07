@@ -6,7 +6,14 @@ import { useMessage, type DropdownOption } from "naive-ui";
 import { copyText } from "../app/env";
 import { describeError } from "../app/formatters";
 import { desktopWorkbench } from "../services/desktopWorkbench";
-import type { AppBootstrap, ClipboardItemRecord, ConnectivityReport, OnlineDevice } from "../types/workbench";
+import type {
+  AppBootstrap,
+  ClipboardItemRecord,
+  ConnectivityReport,
+  LinkedWebDevice,
+  OnlineDevice,
+  PairRequestSummary,
+} from "../types/workbench";
 import { GlobeIcon, PinIcon, PinOffIcon, SettingsIcon } from "../utils/desktopIcons";
 import {
   isDesktopFileItem,
@@ -46,6 +53,11 @@ export function useDesktopWorkbench() {
   const contextMenuY = ref(0);
   const contextMenuItem = ref<ClipboardItemRecord | null>(null);
   const onlineDevices = ref<OnlineDevice[]>([]);
+  const linkedDevices = ref<LinkedWebDevice[]>([]);
+  const pairRequests = ref<PairRequestSummary[]>([]);
+  const pairRequestModalOpen = ref(false);
+
+  const activePairRequest = computed(() => pairRequests.value[0] ?? null);
 
   const detailItem = computed(() => items.value.find((item) => item.id === detailItemId.value) ?? null);
   const sessionPort = computed(() => {
@@ -92,7 +104,7 @@ export function useDesktopWorkbench() {
     })),
   );
   const moreOptions = computed<DropdownOption[]>(() => [
-    { label: "Web 入口", key: "web", renderIcon: renderOptionIcon(GlobeIcon) },
+    { label: "关联设备", key: "web", renderIcon: renderOptionIcon(GlobeIcon) },
     { label: "设置", key: "settings", renderIcon: renderOptionIcon(SettingsIcon) },
     {
       label: desktopPinned.value ? "取消固定" : "固定窗口",
@@ -140,6 +152,7 @@ export function useDesktopWorkbench() {
   let cleanupClipboard: (() => void) | null = null;
   let cleanupSession: (() => void) | null = null;
   let cleanupFileTransfer: (() => void) | null = null;
+  let cleanupPairRequest: (() => void) | null = null;
   let clockTimer: number | null = null;
 
   onMounted(async () => {
@@ -156,6 +169,7 @@ export function useDesktopWorkbench() {
     });
     cleanupSession = desktopWorkbench.subscribeSessionRefresh(() => {
       void loadBootstrap();
+      void refreshLinkedDevices();
     });
     cleanupFileTransfer = desktopWorkbench.subscribeFileTransferProgress((event) => {
       patchDesktopFileTransfer(items, event);
@@ -163,13 +177,16 @@ export function useDesktopWorkbench() {
         void refreshHistory(true);
       }
     });
+    cleanupPairRequest = desktopWorkbench.subscribePairRequest(() => {
+      void handleIncomingPairRequest();
+    });
     clockTimer = window.setInterval(() => {
       clock.value = Date.now();
     }, 1000);
 
     try {
       await loadBootstrap();
-      await Promise.all([refreshHistory(true), refreshOnlineDevices(), syncDesktopPinned()]);
+      await Promise.all([refreshHistory(true), refreshOnlineDevices(), refreshLinkedDevices(), refreshPairRequests(), syncDesktopPinned()]);
     } finally {
       loading.value = false;
     }
@@ -179,6 +196,7 @@ export function useDesktopWorkbench() {
     cleanupClipboard?.();
     cleanupSession?.();
     cleanupFileTransfer?.();
+    cleanupPairRequest?.();
     if (clockTimer !== null) {
       window.clearInterval(clockTimer);
     }
@@ -256,6 +274,31 @@ export function useDesktopWorkbench() {
     }
   }
 
+  async function refreshLinkedDevices() {
+    if (!available) {
+      return;
+    }
+
+    try {
+      linkedDevices.value = await desktopWorkbench.listLinkedWebDevices();
+    } catch (error) {
+      message.error(describeError(error));
+    }
+  }
+
+  async function refreshPairRequests() {
+    if (!available) {
+      return;
+    }
+
+    try {
+      pairRequests.value = await desktopWorkbench.listPairRequests();
+      pairRequestModalOpen.value = pairRequests.value.length > 0;
+    } catch (error) {
+      message.error(describeError(error));
+    }
+  }
+
   async function handleRowClick(item: ClipboardItemRecord) {
     selectedId.value = item.id;
     if (isDesktopFileItem(item)) {
@@ -267,7 +310,17 @@ export function useDesktopWorkbench() {
 
   async function openWebPanel() {
     await loadBootstrap();
+    await refreshLinkedDevices();
     webPanelOpen.value = true;
+  }
+
+  async function handleIncomingPairRequest() {
+    try {
+      await desktopWorkbench.showDesktopApp();
+    } catch {
+      // The backend already attempts to show the app.
+    }
+    await refreshPairRequests();
   }
 
   async function hideDesktopApp() {
@@ -535,7 +588,7 @@ export function useDesktopWorkbench() {
       return;
     }
     await copyText(resolvedSessionUrl.value);
-    message.success("链接已复制");
+    message.success("关联入口已复制");
   }
 
   async function handleOpenEntry() {
@@ -560,7 +613,51 @@ export function useDesktopWorkbench() {
     try {
       await desktopWorkbench.rotateSessionToken();
       await loadBootstrap();
-      message.success("会话令牌已刷新");
+      message.success("关联入口已刷新");
+    } catch (error) {
+      message.error(describeError(error));
+    }
+  }
+
+  async function handleRemoveLinkedDevice(deviceId: string) {
+    try {
+      await desktopWorkbench.removeLinkedWebDevice(deviceId);
+      message.success("设备关联已移除");
+      await refreshLinkedDevices();
+      await refreshOnlineDevices();
+    } catch (error) {
+      message.error(describeError(error));
+    }
+  }
+
+  async function handleApprovePairRequest() {
+    const request = activePairRequest.value;
+    if (!request) {
+      pairRequestModalOpen.value = false;
+      return;
+    }
+
+    try {
+      await desktopWorkbench.approvePairRequest(request.id);
+      message.success("已同意设备关联");
+      await refreshPairRequests();
+      await refreshLinkedDevices();
+    } catch (error) {
+      message.error(describeError(error));
+    }
+  }
+
+  async function handleRejectPairRequest() {
+    const request = activePairRequest.value;
+    if (!request) {
+      pairRequestModalOpen.value = false;
+      return;
+    }
+
+    try {
+      await desktopWorkbench.rejectPairRequest(request.id);
+      message.success("已拒绝设备关联");
+      await refreshPairRequests();
     } catch (error) {
       message.error(describeError(error));
     }
@@ -645,6 +742,7 @@ export function useDesktopWorkbench() {
     detailPanelOpen,
     diagnosticsLoading,
     diagnosticsModalOpen,
+    activePairRequest,
     handleCandidateSelect,
     handleContextSelect,
     handleCopyDetail,
@@ -652,13 +750,18 @@ export function useDesktopWorkbench() {
     handleDeleteDetail,
     handleMoreSelect,
     handleOpenEntry,
+    handleApprovePairRequest,
+    handleRejectPairRequest,
+    handleRemoveLinkedDevice,
     handleRefreshSession,
     handleRowClick,
     items,
+    linkedDevices,
     loading,
     moreOptions,
     openContextMenu,
     openDiagnostics,
+    pairRequestModalOpen,
     refreshing,
     resolvedSessionUrl,
     search,

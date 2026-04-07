@@ -16,8 +16,57 @@ export namespace auth {
 	        this.bearerHeaderName = source["bearerHeaderName"];
 	    }
 	}
+	export class LinkedDeviceSummary {
+	    id: string;
+	    name: string;
+	    lastKnownIp: string;
+	    lastSeenAt: number;
+	    online: boolean;
+	    expiresAt: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new LinkedDeviceSummary(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.name = source["name"];
+	        this.lastKnownIp = source["lastKnownIp"];
+	        this.lastSeenAt = source["lastSeenAt"];
+	        this.online = source["online"];
+	        this.expiresAt = source["expiresAt"];
+	    }
+	}
+	export class PairRequestSummary {
+	    id: string;
+	    deviceId: string;
+	    deviceName: string;
+	    status: string;
+	    createdAt: number;
+	    updatedAt: number;
+	    expiresAt: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new PairRequestSummary(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.deviceId = source["deviceId"];
+	        this.deviceName = source["deviceName"];
+	        this.status = source["status"];
+	        this.createdAt = source["createdAt"];
+	        this.updatedAt = source["updatedAt"];
+	        this.expiresAt = source["expiresAt"];
+	    }
+	}
 	export class SessionSnapshot {
 	    sessionId: string;
+	    sessionKind: string;
+	    deviceId: string;
+	    deviceName: string;
 	    expiresAt: number;
 	    status: string;
 	    accessUrl: string;
@@ -35,6 +84,9 @@ export namespace auth {
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.sessionId = source["sessionId"];
+	        this.sessionKind = source["sessionKind"];
+	        this.deviceId = source["deviceId"];
+	        this.deviceName = source["deviceName"];
 	        this.expiresAt = source["expiresAt"];
 	        this.status = source["status"];
 	        this.accessUrl = source["accessUrl"];
