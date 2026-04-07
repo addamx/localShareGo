@@ -1,6 +1,6 @@
 <template>
   <div class="flex h-screen flex-col overflow-hidden" @click="handleSurfaceClick">
-    <div class="h-2 shrink-0 [--wails-draggable:drag]" />
+    <div class="h-3 shrink-0 bg-amber-100 cursor-grab [--wails-draggable:drag]" />
 
     <section
       v-if="!available"
@@ -22,6 +22,7 @@
       :refreshing="refreshing"
       :search="search"
       :selected-id="selectedId"
+      @search-arrow-down="selectFirstItem"
       @update:search="search = $event"
       @more-select="handleMoreSelect"
       @row-click="handleClipboardRowClick"
@@ -115,6 +116,7 @@ const {
   refreshing,
   resolvedSessionUrl,
   search,
+  selectFirstItem,
   selectedId,
   tokenCountdown,
   webPanelOpen,

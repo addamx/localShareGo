@@ -1,11 +1,12 @@
 <template>
-  <section class="panel-surface flex min-h-0 flex-col rounded-[26px] p-4 sm:p-[1rem]">
+  <section class="panel-surface flex min-h-0 flex-col px-0.5">
     <div class="flex items-center gap-[0.55rem] border-b border-[rgba(20,33,27,0.08)] pb-[0.65rem]">
       <n-input
         :value="search"
         clearable
         placeholder="Search clipboard"
         class="min-w-0 flex-1 [&_.n-input-wrapper]:!rounded-[10px]"
+        @keydown="handleSearchKeyDown"
         @update:value="emit('update:search', $event)"
       >
         <template #prefix>
@@ -36,12 +37,15 @@
       <template v-else>
         <button
           v-for="item in items"
+          :ref="setItemRef(item.id)"
           :key="item.id"
           type="button"
-          class="flex w-full items-start gap-3 border-0 border-b border-[rgba(20,33,27,0.08)] bg-transparent px-[0.75rem] py-[0.82rem] text-left text-inherit transition-colors duration-150 hover:bg-[rgba(31,122,90,0.05)]"
+          :data-item-id="item.id"
+          class="flex w-full items-start gap-3 border-0 border-b border-[rgba(20,33,27,0.08)] bg-transparent px-[0.5rem] py-[0.5rem] text-left text-inherit transition-colors duration-150 hover:bg-[rgba(31,122,90,0.05)]"
           :class="[
-            item.id === selectedId || item.isCurrent ? 'bg-[rgba(31,122,90,0.07)]' : '',
-            item.isCurrent ? 'shadow-[inset_2px_0_0_#1f7a5a]' : '',
+            item.id === selectedId ? 'bg-[rgba(31,122,90,0.09)] shadow-[inset_0_0_0_1px_rgba(31,122,90,0.24)]' : '',
+            item.isCurrent ? 'shadow-[inset_3px_0_0_#1f7a5a]' : '',
+            item.id === selectedId && item.isCurrent ? 'shadow-[inset_3px_0_0_#1f7a5a,inset_0_0_0_1px_rgba(31,122,90,0.24)]' : '',
           ]"
           @click="emit('row-click', item)"
           @contextmenu.prevent.stop="emit('row-contextmenu', { event: $event, item })"
@@ -68,6 +72,13 @@
                     <p class="m-0 truncate text-[0.95rem] font-semibold text-[var(--text-main)]">
                       {{ item.fileMeta?.fileName || item.preview || "Untitled file" }}
                     </p>
+                    <div class="mt-[0.14rem] flex flex-wrap items-center gap-[0.45rem] text-[0.77rem] text-[var(--text-muted)]">
+                      <span>{{ formatSource(item.sourceKind) }}</span>
+                      <span>{{ formatDateTime(item.createdAt) }}</span>
+                      <n-icon v-if="item.pinned" size="14" class="text-[#9a691b]">
+                        <Pin class="h-[14px] w-[14px]" />
+                      </n-icon>
+                    </div>
                     <div class="mt-[0.12rem] flex flex-wrap items-center gap-[0.42rem] text-[0.77rem] text-[var(--text-muted)]">
                       <span>{{ formatFileSize(item.fileMeta?.sizeBytes ?? 0) }}</span>
                       <span>{{ formatFileState(item.fileMeta?.transferState) }}</span>
@@ -107,7 +118,7 @@
           </template>
 
           <template v-else>
-            <div class="grid min-w-0 flex-1 gap-[0.36rem]">
+            <div class="flex flex-col min-w-0 flex-1 gap-[0.1rem]">
               <div class="flex flex-wrap items-center gap-[0.45rem] text-[0.77rem] text-[var(--text-muted)]">
                 <span>{{ formatSource(item.sourceKind) }}</span>
                 <span>{{ formatDateTime(item.createdAt) }}</span>
@@ -132,7 +143,7 @@
 
 <script setup lang="ts">
 import { Check, FileImage, FileText, LoaderCircle, Pin } from "lucide-vue-next";
-import { ref } from "vue";
+import { nextTick, ref, watch } from "vue";
 import { NButton, NDropdown, NEmpty, NIcon, NInput, NSpin, type DropdownOption } from "naive-ui";
 
 import { formatDateTime, formatSource } from "../../app/formatters";
@@ -145,7 +156,7 @@ import {
 } from "../../hooks/useDesktopFileTransfers";
 import { MoreIcon, SearchIcon } from "../../utils/desktopIcons";
 
-defineProps<{
+const props = defineProps<{
   items: ClipboardItemRecord[];
   loading: boolean;
   moreOptions: DropdownOption[];
@@ -158,10 +169,24 @@ const emit = defineEmits<{
   (e: "more-select", key: string | number): void;
   (e: "row-click", item: ClipboardItemRecord): void;
   (e: "row-contextmenu", payload: { event: MouseEvent; item: ClipboardItemRecord }): void;
+  (e: "search-arrow-down"): void;
   (e: "update:search", value: string): void;
 }>();
 
 const scroller = ref<HTMLElement | null>(null);
+const itemRefs = new Map<string, HTMLButtonElement>();
+
+watch(
+  () => props.selectedId,
+  (value) => {
+    if (!value) {
+      return;
+    }
+    void nextTick(() => {
+      itemRefs.get(value)?.scrollIntoView({ block: "nearest" });
+    });
+  },
+);
 
 function fileIcon(item: ClipboardItemRecord) {
   return isDesktopImageFile(item) ? FileImage : FileText;
@@ -173,6 +198,36 @@ function formatFileSize(bytes: number) {
 
 function formatFileState(state: ClipboardTransferState | undefined | null) {
   return formatDesktopTransferState(state ?? "metadata_only");
+}
+
+function setItemRef(itemId: string) {
+  return (element: Element | null) => {
+    if (element instanceof HTMLButtonElement) {
+      itemRefs.set(itemId, element);
+      return;
+    }
+    itemRefs.delete(itemId);
+  };
+}
+
+function handleSearchKeyDown(event: KeyboardEvent) {
+  if (event.key === "Escape") {
+    event.preventDefault();
+    event.stopPropagation();
+    emit("update:search", "");
+    return;
+  }
+
+  if (event.key !== "ArrowDown") {
+    return;
+  }
+
+  event.preventDefault();
+  event.stopPropagation();
+  if (event.target instanceof HTMLInputElement) {
+    event.target.blur();
+  }
+  emit("search-arrow-down");
 }
 
 defineExpose({

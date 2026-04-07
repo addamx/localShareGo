@@ -286,7 +286,71 @@ export function useDesktopWorkbench() {
     if (event.key === "Escape") {
       closeContextMenu();
       void hideDesktopApp();
+      return;
     }
+
+    if (event.altKey || event.ctrlKey || event.metaKey || isEditableTarget(event.target)) {
+      return;
+    }
+
+    if (event.key === "ArrowDown") {
+      event.preventDefault();
+      moveSelection(1);
+      return;
+    }
+
+    if (event.key === "ArrowUp") {
+      event.preventDefault();
+      moveSelection(-1);
+      return;
+    }
+
+    if (event.key === "Enter" || event.key === " " || event.key === "Spacebar") {
+      event.preventDefault();
+      void activateSelectedItem();
+      return;
+    }
+  }
+
+  function moveSelection(delta: number) {
+    if (items.value.length === 0) {
+      return;
+    }
+
+    const currentIndex = selectedId.value ? items.value.findIndex((item) => item.id === selectedId.value) : -1;
+    if (currentIndex < 0) {
+      selectedId.value = items.value[0]?.id ?? null;
+      return;
+    }
+
+    const nextIndex = Math.min(Math.max(currentIndex + delta, 0), items.value.length - 1);
+    selectedId.value = items.value[nextIndex]?.id ?? selectedId.value;
+  }
+
+  async function activateSelectedItem() {
+    const item = items.value.find((entry) => entry.id === selectedId.value) ?? items.value[0] ?? null;
+    if (!item) {
+      return;
+    }
+
+    await handleRowClick(item);
+  }
+
+  function selectFirstItem() {
+    selectedId.value = items.value[0]?.id ?? null;
+  }
+
+  function isEditableTarget(target: EventTarget | null) {
+    if (!(target instanceof HTMLElement)) {
+      return false;
+    }
+
+    const tagName = target.tagName;
+    if (tagName === "INPUT" || tagName === "TEXTAREA" || tagName === "SELECT") {
+      return true;
+    }
+
+    return target.isContentEditable;
   }
 
   function handleWindowBlur() {
@@ -598,6 +662,7 @@ export function useDesktopWorkbench() {
     refreshing,
     resolvedSessionUrl,
     search,
+    selectFirstItem,
     selectedId,
     tokenCountdown,
     webPanelOpen,
