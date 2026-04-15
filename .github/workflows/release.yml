@@ -1,0 +1,138 @@
+name: release-desktop
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag, for example v0.1.0"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+env:
+  APP_NAME: localShareGo
+  GO_VERSION: "1.23.0"
+  NODE_VERSION: "22"
+  NODE_OPTIONS: "--max-old-space-size=4096"
+  WAILS_VERSION: "v2.12.0"
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    env:
+      RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.tag || github.ref_name }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+          cache-dependency-path: frontend/pnpm-lock.yaml
+
+      - name: Enable Corepack
+        shell: powershell
+        run: corepack enable
+
+      - name: Install NSIS
+        shell: powershell
+        run: choco install nsis --no-progress -y
+
+      - name: Build Windows app
+        shell: powershell
+        run: go run github.com/wailsapp/wails/v2/cmd/wails@$env:WAILS_VERSION build -clean -platform windows/amd64 -nsis
+
+      - name: Package Windows artifacts
+        shell: powershell
+        run: |
+          New-Item -ItemType Directory -Force -Path release | Out-Null
+          Copy-Item "build/bin/$env:APP_NAME-amd64-installer.exe" "release/$($env:APP_NAME)_$($env:RELEASE_TAG)_windows_amd64_installer.exe"
+          Compress-Archive -Path "build/bin/$env:APP_NAME.exe" -DestinationPath "release/$($env:APP_NAME)_$($env:RELEASE_TAG)_windows_amd64.zip" -Force
+
+      - name: Upload Windows artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-release
+          path: release/*
+          if-no-files-found: error
+
+  build-macos:
+    runs-on: macos-latest
+    env:
+      RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.tag || github.ref_name }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+          cache-dependency-path: frontend/pnpm-lock.yaml
+
+      - name: Enable Corepack
+        run: corepack enable
+
+      - name: Build macOS app
+        run: go run github.com/wailsapp/wails/v2/cmd/wails@${WAILS_VERSION} build -clean -platform darwin/universal
+
+      - name: Package macOS artifact
+        run: |
+          mkdir -p release
+          ditto -c -k --sequesterRsrc --keepParent "build/bin/${APP_NAME}.app" "release/${APP_NAME}_${RELEASE_TAG}_macos_universal.zip"
+
+      - name: Upload macOS artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-release
+          path: release/*
+          if-no-files-found: error
+
+  publish-release:
+    runs-on: ubuntu-latest
+    needs:
+      - build-windows
+      - build-macos
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.tag || github.ref_name }}
+    steps:
+      - name: Download packaged artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-artifacts
+          pattern: "*-release"
+          merge-multiple: true
+
+      - name: Publish GitHub release
+        run: |
+          mapfile -t files < <(find release-artifacts -maxdepth 1 -type f | sort)
+          if [ "${#files[@]}" -eq 0 ]; then
+            echo "no release artifacts found" >&2
+            exit 1
+          fi
+
+          if gh release view "${RELEASE_TAG}" >/dev/null 2>&1; then
+            gh release upload "${RELEASE_TAG}" "${files[@]}" --clobber
+            exit 0
+          fi
+
+          gh release create "${RELEASE_TAG}" "${files[@]}" --generate-notes --latest --target "${GITHUB_SHA}"

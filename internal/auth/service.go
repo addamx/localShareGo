@@ -227,20 +227,19 @@ func (a *Service) ListLinkedDevices(now int64) ([]LinkedDeviceSummary, error) {
 
 	items := make([]LinkedDeviceSummary, 0, len(devices))
 	for _, device := range devices {
-		expiresAt := int64(0)
 		session, sessionErr := a.store.GetActiveDeviceSessionByDeviceID(device.ID, now)
 		if sessionErr != nil {
 			return nil, sessionErr
 		}
-		if session != nil {
-			expiresAt = session.ExpiresAt
+		if session == nil {
+			continue
 		}
 		items = append(items, LinkedDeviceSummary{
 			ID:          device.ID,
 			Name:        device.Name,
 			LastKnownIP: optionalString(device.LastKnownIP),
 			LastSeenAt:  deviceLastSeenAt(device.LastSeenAt),
-			ExpiresAt:   expiresAt,
+			ExpiresAt:   session.ExpiresAt,
 		})
 	}
 	return items, nil
