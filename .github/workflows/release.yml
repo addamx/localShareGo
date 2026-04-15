@@ -59,7 +59,13 @@ jobs:
         shell: powershell
         run: |
           New-Item -ItemType Directory -Force -Path release | Out-Null
-          Copy-Item "build/bin/$env:APP_NAME-amd64-installer.exe" "release/$($env:APP_NAME)_$($env:RELEASE_TAG)_windows_amd64_installer.exe"
+          $installer = Get-ChildItem "build/bin" -Filter "*installer*.exe" | Select-Object -First 1
+          if (-not $installer) {
+            Write-Host "build/bin contents:"
+            Get-ChildItem "build/bin" | Format-Table -AutoSize | Out-String | Write-Host
+            throw "windows installer not found in build/bin"
+          }
+          Copy-Item $installer.FullName "release/$($env:APP_NAME)_$($env:RELEASE_TAG)_windows_amd64_installer.exe"
           Compress-Archive -Path "build/bin/$env:APP_NAME.exe" -DestinationPath "release/$($env:APP_NAME)_$($env:RELEASE_TAG)_windows_amd64.zip" -Force
 
       - name: Upload Windows artifacts
