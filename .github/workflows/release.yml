@@ -35,16 +35,17 @@ jobs:
         with:
           go-version: ${{ env.GO_VERSION }}
 
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: pnpm
           cache-dependency-path: frontend/pnpm-lock.yaml
-
-      - name: Enable Corepack
-        shell: powershell
-        run: corepack enable
 
       - name: Install NSIS
         shell: powershell
@@ -81,15 +82,17 @@ jobs:
         with:
           go-version: ${{ env.GO_VERSION }}
 
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: pnpm
           cache-dependency-path: frontend/pnpm-lock.yaml
-
-      - name: Enable Corepack
-        run: corepack enable
 
       - name: Build macOS app
         run: go run github.com/wailsapp/wails/v2/cmd/wails@${WAILS_VERSION} build -clean -platform darwin/universal
