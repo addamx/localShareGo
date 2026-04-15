@@ -49,7 +49,25 @@ jobs:
 
       - name: Install NSIS
         shell: powershell
-        run: choco install nsis --no-progress -y
+        run: |
+          choco install nsis --no-progress -y
+          $searchRoots = @(
+            "$env:ProgramFiles(x86)\NSIS",
+            "$env:ProgramFiles\NSIS",
+            "$env:ChocolateyInstall"
+          ) | Where-Object { $_ -and (Test-Path $_) }
+          $makensis = Get-ChildItem -Path $searchRoots -Filter "makensis.exe" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+          if (-not $makensis) {
+            throw "makensis.exe not found after NSIS installation"
+          }
+          Add-Content -Path $env:GITHUB_PATH -Value $makensis.Directory.FullName
+          Write-Host "makensis found at $($makensis.FullName)"
+
+      - name: Verify NSIS
+        shell: powershell
+        run: |
+          Get-Command makensis | Format-List Source, Version
+          & makensis /VERSION
 
       - name: Build Windows app
         shell: powershell
