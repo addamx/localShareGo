@@ -52,7 +52,7 @@ jobs:
         run: |
           choco install nsis --no-progress -y
           $searchRoots = @(
-            "$env:ProgramFiles(x86)\NSIS",
+            "${env:ProgramFiles(x86)}\NSIS",
             "$env:ProgramFiles\NSIS",
             "$env:ChocolateyInstall"
           ) | Where-Object { $_ -and (Test-Path $_) }
